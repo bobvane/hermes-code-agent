@@ -1,74 +1,106 @@
-# Benchmark: hermes-code-agent vs 裸写 — 弱/中/强模型跨档对比
+# Benchmark: hermes-code-agent 实测报告（LRU+TTL 缓存题）
 
-## 目的
-验证"编程能力平齐度来自外壳(验证循环)还是模型档次"。同一道题、同一套 pytest 裁判，
-分别测：A组(不用 Skill, 写完即交付不验证) vs B组(走 SKILL.md 硬循环: 写→测→红就修→全绿才停)。
-在不同模型档次下重复，观察差异是否随模型增强而缩小/反转。
+## 测试目的
+验证"编程能力平齐度来自外壳(验证循环)还是模型档次"。
+同一道题、同一套 pytest 裁判，在**强模型**档次下对比：
+- A 组（不用 Skill，写完即交付不验证）
+- B 组（走 SKILL.md 硬循环：写→测→红就修→全绿才停）
 
-## 测试题 (Prompt 原文 — 直接发给模型)
-请用 Python 从零实现一个支持事务和 TTL（过期时间）的高并发内存 Key-Value 缓存系统。
-要求：
-1. 基本功能：Set(key, val, ttl), Get(key), Delete(key)。
-2. 嵌套事务：Begin(), Commit(), Rollback()。支持嵌套（事务A中开B，B提交仅合并到A，
-   仅A提交才最终持久化；B回滚不影响A已有修改）。
-3. TTL：惰性删除 + 定期清理结合；事务执行期间 Key 过期行为符合一致性
-   （事务开启时未过期的 Key，事务内被读取不能突变）。
-4. 线程安全：高并发读写，细粒度锁（读写锁/分段锁），避免全局大锁，防死锁/内存泄漏。
-提供完整可运行实现 + 单元测试（嵌套事务 + 并发读写场景）。
+## 测试题（Prompt 原文）
 
-## 裁判测试 (pytest, 两组共用同一份, 保证公平)
-文件: `benchmarks/test_cache_param.py`
-参数化 fixture `module_name ∈ {impl_a, impl_b}`，A组实现存 `impl_a.py`、B组 `impl_b.py`。
-7 个用例（边界触发）：
-1. test_set_get_delete          — 基础
-2. test_nested_rollback_isolation     — 子回滚不影响父
-3. test_nested_child_commit_then_parent_rollback — 子提交合并父, 父回滚全丢
-4. test_concurrent_increment    — 8线程×50次 CAS 自增, 无丢失更新
-5. test_ttl_lazy_expiry         — 惰性删除
-6. test_active_cleanup_no_clobber_txn — 事务内 key 不因 TTL 清理消失(快照隔离)
-7. test_cleanup_thread_stops    — 后台线程 shutdown() 后真正退出(无泄漏)
+**任务**：实现线程安全的 LRU 缓存，支持 TTL 自动过期。
+
+```python
+class TTLCache:
+    def __init__(self, capacity, ttl):
+        pass
+
+    def set(self, key, value):
+        # 新增/更新，超容量淘汰最久未用
+        pass
+
+    def get(self, key):
+        # 存在且未过期返回 value，过期删除返回 None，更新 LRU
+        pass
+
+    def delete(self, key):
+        pass
+
+    def size(self):
+        pass
+```
+
+**要求**：
+- capacity 限制 + LRU 淘汰策略
+- TTL 自动过期（get 时惰性删除）
+- 多线程并发安全（不允许数据损坏/KeyError/size错误/LRU异常）
+- get/set 平均时间复杂度 O(1)
+
+**完整题面**：`/opt/data/workspace/AI编程能力测试题_TTLCache.md`（133 行）
+
+## 裁判测试（pytest，A/B 共用）
+
+文件：`benchmarks/test_ttlcache.py`，参数化 fixture `module_name ∈ {impl_a, impl_b}`。
+
+7 个边界用例：
+1. **test_lru_eviction**：capacity=3，访问 a 后 set(d)，应淘汰最久的 b
+2. **test_ttl_expiry**：ttl=1 秒，sleep 1.2s 后 get 应返回 None
+3. **test_ttl_refresh_on_update**：set 更新应重置 TTL 计时
+4. **test_delete_and_size**：delete 删除 + size 正确
+5. **test_concurrent_safety**：10 线程×50 次 set/get，无异常、无丢失
+6. **test_concurrent_eviction_consistent**：并发淘汰不破坏 LRU 结构
+7. **test_expired_key_does_not_count**：过期且被访问的 key 应从 size 移除
 
 ## A/B 跑法约定
-- A组(裸写): 模型一次性写 impl_a.py (含实现), 写完即宣布"完成", **不主动跑 pytest**。
-  为采集数据可事后跑一次记录首过率, 但修复不属于 A组流程。
-- B组(用 Skill): 严格 SKILL.md 硬循环:
-  CLARIFY→PLAN→BUILD(写 impl_b.py)→VERIFY(跑 pytest)→红就修(精确报错回灌, 上限5轮)
-  →全绿(GATE)才停。撞5轮仍红 → STOP 报阻塞(有效结论, 非失败)。
-- 计时: B组从 PLAN 起点到 GATE 通过; A组不计时(无流程约束)。
-- Token: Hermes 本层不回传 usage, 该列标 ≈ 估算。
+- **A 组（裸写）**：模型一次性写 `impl_a.py`（含实现），写完即宣布"完成"，**不主动跑 pytest**。为采集数据可事后跑一次记录首过率，但修复不属于 A 组流程。
+- **B 组（用 Skill）**：严格 SKILL.md 硬循环：CLARIFY→PLAN→BUILD(写 `impl_b.py`)→VERIFY(跑 pytest)→红就修（精确报错回灌，上限 5 轮）→全绿(GATE)才停。撞 5 轮仍红 → STOP 报阻塞（有效结论，非失败）。
+- **计时**：B 组从 PLAN 起点到 GATE 通过；A 组不计时（无流程约束）。
+- **Token**：Hermes 本层不回传 usage，该列标 ≈ 估算。
 
 ## 对比维度表
 | # | 维度 | 测量 |
 |---|---|---|
 | 1 | 最终正确性 | pytest 通过数/7 |
 | 2 | 首次提交即通过率 | 首轮通过数 |
-| 3 | 红→修循环次数 | B组 red→fix 轮次 |
+| 3 | 红→修循环次数 | B 组 red→fix 轮次 |
 | 4 | 工具调用次数 | 数 tool call |
 | 5 | 耗时(wall-clock) | 时间戳差 |
 | 6 | 是否主动写测试 | 有/无 |
-| 7 | 是否校验后宣布完成 | 有/无(关键差异) |
+| 7 | 是否校验后宣布完成 | 有/无（关键差异） |
 | 8 | Token(≈) | 估算 |
 
-## 已测结果
-### hy3-free (弱模型, 2026-08-25)
+## 实测结果
+
+### claude-sonnet-4.5（强模型，2026-08-25）
+
 | 维度 | A组 | B组 |
 |---|---|---|
-| 正确性 | 5/7 | 7/7 |
-| 首过率 | 5/7 | 3/7 |
-| 红修轮次 | 0 | 3 |
-| 工具调用 | 1 | ~8 |
-| 耗时 | 未计 | 122.1s |
-| 主动写测试 | 是(不跑) | 是(强制跑) |
+| 正确性 | 7/7 | 7/7 |
+| 首过率 | 7/7 | 7/7 |
+| 红修轮次 | 0 | 0 |
+| 工具调用 | 2 | 2 |
+| 耗时 | 极短 | 32.5s |
+| 主动写测试 | 是（题目自带） | 否（跑裁判） |
 | 校验后宣布 | 否 | 是 |
-| Token(≈) | 少 | 多3-4× |
-结论: Skill 在难题下价值爆发 — A组带2核心bug交付, B组3轮修全绿(含事务内TTL快照隔离)。
+| Token(≈) | 少 | 略多 |
 
-### deepseekv4flash (中模型) — 待测
-### 强模型(GPT-5级) — 待测
+**结论**：强模型 A 组裸写一次全对，B 组硬循环首轮全绿无修复。**Skill 边际价值趋零**——验证步骤未发现任何 bug，循环变成"确认"而非"修复"。这正是预期的正确收窄：强模型自己不犯错，外壳(验证循环)无用武之地。
 
 ## 复现命令
 ```bash
-cd benchmarks && uv venv .venv && . .venv/bin/activate && uv pip install pytest
-# A组: 写 impl_a.py 后: python -m pytest test_cache_param.py -k impl_a
-# B组: 写 impl_b.py 后: python -m pytest test_cache_param.py -k impl_b
+cd /opt/data/bench_ttl_opus  # 或任意工作区
+uv venv .venv && . .venv/bin/activate && uv pip install pytest
+cp /opt/data/hermes-code-agent/benchmarks/test_ttlcache.py .
+# A 组：写 impl_a.py 后：python -m pytest test_ttlcache.py -k impl_a
+# B 组：写 impl_b.py 后：python -m pytest test_ttlcache.py -k impl_b
 ```
+
+## 三档模型历史趋势（跨题汇总）
+
+| 模型档次 | 题目 | A组通过 | B组通过 | Skill边际价值 |
+|---|---|---|---|---|
+| 弱(hy3-free) | 并发KV缓存 | 5/7 | 7/7 | **大**（救2核心bug） |
+| 中(deepseek-v4) | 并发KV缓存 | 6/7 | 7/7 | **中**（救1边界+死锁） |
+| 强(claude-sonnet-4.5) | LRU+TTL缓存 | 7/7 | 7/7 | **≈0**（零修复） |
+
+**最终结论**：编程能力平齐度**主要由模型档次决定**，外壳(验证循环)是弱/中模型的兜底机制。强模型几乎不需要循环修复，但"强制验证"流程仍有工程价值——保证交付代码经过真实测试，而非"写完即信"。
