@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 0.6.0
+version: 0.9.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -9,9 +9,13 @@ metadata:
   hermes:
     tags: [coding, agent, tdd, workflow, dev, automation]
     homepage: https://github.com/bobvane/hermes-code-agent
+    title_zh: Hermes 代码助手（自纠错编程工作流）
 ---
 
 # Hermes Code Agent
+
+> **Hermes 代码助手（自纠错编程工作流）**
+> 把 Hermes 变成一个会自己纠错的编程智能体：用「先验证、后完成」的硬循环（实现→测试/校验→修复→全绿才算完成）包裹模型，让弱到中档模型也能稳定产出可靠代码。
 
 Turn Hermes into a self-correcting coding agent. The model alone is a "weak coder"; this skill is the harness that makes weak-to-mid models punch above their weight by forcing a **verify-before-done** loop instead of one-shot code dumping.
 
