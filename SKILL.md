@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 1.0.0
+version: 1.1.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -50,6 +50,12 @@ Every implementation task goes through this. The agent must NOT report "done" un
 
 **Gate rule (must be explicit in your reasoning):** "not green = not done." Never summarize past a red check. If a check is unavailable, say so and downgrade confidence — do not fake green.
 
+**Doom-loop rule (from OpenCode processor.ts):** if you have made the SAME tool call with the SAME arguments 3 times in a row (same file, same edit, same result), STOP. The approach is not working — switch strategy or report the blocker. Do not burn your red→fix budget repeating an ineffective action.
+
+**Fast syntax gate (before full VERIFY):** after each BUILD edit, run a cheap single-file check when available — Python: `python -m py_compile <file>`; TS: `npx tsc --noEmit`; Go: `go vet <pkg>`. This catches syntax/type errors in seconds instead of waiting for the full test suite, shrinking each red→fix cycle.
+
+**API resilience (from OpenCode retry.ts):** when calling model APIs directly (curl/scripts), build in: max 5 retries, exponential backoff starting at 2s (×2), respect `retry-after` headers, and treat 429/5xx/network errors as retryable. Prefer non-streaming (`stream:false`) for long code generations through proxy gateways — streaming is prone to mid-stream drops.
+
 ## Zero-config by default（零配置，无需 AGENTS.md）
 
 > Install once, zero-config. No per-project file copying required.
@@ -97,6 +103,20 @@ OpenCode leads (harness architecture). Codex secondary (ModeKind/Guardian/Budget
 5. **Repo map before edits (Aider).** Before BUILD, build a lightweight structural index of the repo (symbol defs + import edges), rank by relevance to the current step, and feed the top-N symbols as context. Do NOT dump the whole tree. This gives automatic codebase awareness — the biggest context-efficiency win among all agents surveyed, and the direct antidote to "weak model gets lost in a large repo". Approximate Aider's PageRank repo map (`aider/repomap.py`, `nx.pagerank`).
 6. **Checkpoint before each BUILD step (Cline).** Before editing, take a reversible snapshot (e.g. `git stash` / worktree / copy) so a bad step can be undone. Cline proves per-step rollback (snapshot after every tool use, one-click restore) is a first-class safety rail — especially valuable for weak models that may make a destructive edit.
 7. **Model-aware context strategy (Gemini CLI).** If the active model has a large context window, prefer loading broadly (+ periodic compress) over aggressive pruning. If small-window, rely on the repo map (pattern 5). Gemini's 1M-token strategy is the opposite pole from OpenCode's compact-and-trim; pick per model. (Pi confirms the minimal-kernel + extension design — our skill stays thin orchestrator, not a monolith; no separate rule needed.)
+8. **Format after edit (OpenCode format.file).** If the project has a formatter (ruff/prettier/gofmt/rustfmt), run it after each BUILD edit and before VERIFY. This eliminates a whole class of cheap lint failures so the red→fix budget goes to real logic bugs.
+9. **Compact aggressively (OpenCode compaction numbers).** Tool outputs >2000 chars are summarized to their error lines; completed steps collapse to one status line each. Long sessions must stay within context — a compacted history beats an overflowed one.
+10. **Plan/build separation is verifiable (OpenCode plan permission).** After the PLAN step, run `git status`/`git diff` — if working files changed during planning, roll back those changes before BUILD. Planning writes only the plan artifact, never source edits.
+
+## Parallel execution (fan-out, from OpenCode Task tool) / 并行子代理
+
+OpenCode's Task tool makes concurrent subagent launch the default ("launch multiple agents concurrently whenever possible"). We encode it into the hard loop via Hermes's `delegate_task`.
+
+1. **Trigger**: use fan-out when there are ≥2 independent file-level changes, OR a wide read-only exploration is needed. Never parallelize edits to the same file or files with shared imports under active change.
+2. **Self-contained prompts**: each subagent gets its own full brief — subagents see nothing of the main conversation. Every prompt must state: goal, exact files, expected output artifact, and the verify command to run.
+3. **Say write vs research**: tell each agent explicitly whether it writes code or only explores (OpenCode task.txt rule). Exploration agents are read-only.
+4. **Orchestration shape**: N builders (isolated contexts, parallel) + 1 reviewer (converges). The orchestrator reconciles results and never re-implements a builder's work itself.
+5. **Concurrency cap ≤3**: more than 3 parallel agents risks provider rate-limits and makes reconcile harder. Queue the rest.
+6. **Merge gate**: after all builders return, run the FULL project verify (not per-agent checks) before GATE. A step is done only when the merged tree is green.
 
 ## Approval modes (borrowed from Codex CLI)
 

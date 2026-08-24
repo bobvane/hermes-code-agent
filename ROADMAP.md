@@ -63,10 +63,14 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
   - **结论固化**: Skill 价值由「模型档次 × 题目难度」交互决定; 题 C 驗證 Skill 非流式(stream:false)抗 OmniRoute 波动優勢, OpenCode/Aider 流式失敗.
   - **工程陷阱总结**: 在非交互模式下 coding agent 長输出不穩 (Aider 0 字节 / OpenCode 500), 必須 `stream:false` 才通過; 固化為 Advanced pattern pitfall.
   - **生产就绪**: 安装一次零配置, 硬安全规则+自动探测内置, AGENTS.md 可选.
+- **v1.1.0 — 深度源码研究落地 (2026-08-25)**:
+  - **研究**: 克隆 sst/opencode 逐文件深读 + 6 篇技术文章交叉验证 → `references/opencode-deep-research.md`.
+  - **SKILL.md 新增 4 条硬规则**: Doom-loop 熔断（同参同工具×3→STOP）; 快速语法门（py_compile/tsc 单文件秒级反馈）; API 韧性（指数退避+retry-after+非流式防波动）; **Parallel execution fan-out 章节**（delegate_task 编入硬循环: ≥2 独立文件改动触发、自包含 prompt、N builder+1 reviewer、并发≤3、合并后全量 VERIFY 才 GATE）.
+  - **补齐能力**: 子 Agent fan-out（OpenCode Task tool 对标）正式入编.
 
 ## 當前版本 / Current version
 
-**v1.0.0** (2026-08-25): 文档重写 + 三題基准对比固化 + 工程陷阱总结 (stream:false 防波动机制). 生产就绪, 零配置.
+**v1.1.0** (2026-08-25): 深度源码研究落地 — fan-out 章节入编 + doom-loop/快速语法门/API 韧性三条硬规则.
 
 ## 下一步 / Next steps (optional)
 
