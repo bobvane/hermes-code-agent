@@ -2,6 +2,7 @@
 
 Reverse-engineering-by-reading (both are open source: OpenCode MIT, Codex Apache-2.0).
 Goal: pull the *mechanisms* that make these agents strong into `hermes-code-agent`.
+Both are read at equal depth and cross-validated below.
 
 ## 1. OpenCode (primary reference) — `packages/opencode/src/agent/`
 
@@ -24,44 +25,53 @@ Goal: pull the *mechanisms* that make these agents strong into `hermes-code-agen
 
 **Takeaway:** make `delegate_task` (implement + review in parallel) the *default* for non-trivial tasks in our skill, not optional.
 
-## 2. OpenAI Codex CLI (secondary) — `codex-rs/core/src/`
+## 2. OpenAI Codex CLI (equal-depth reference) — `codex-rs/core/src/`
 
-### 2.1 Execution limiter / capacity guard
-`control/execution.rs` — `AgentExecutionLimiter` caps concurrent subagent turns (`max_threads`, `AgentExecutionGuard` RAII). Prevents fork bombs.
+### 2.1 ModeKind: plan vs execute separation
+`context/world_state/collaboration_mode.rs` selects a different system-prompt bundle per `ModeKind::Default` vs `ModeKind::Plan`. Planning and executing are distinct cognitive modes with distinct instructions.
 
-**Takeaway:** when we fan out via `delegate_task`, respect a concurrency cap (Hermes already caps children; document the cap we rely on).
+**Takeaway:** our skill should make the PLAN step explicit and separate from the BUILD step, using a different instruction tone for each (plan = explore + decide; build = minimal edit + verify). Already partially in the loop; now intentional.
 
-### 2.2 Approval as a state machine
-`prompts/templates/permissions/approval_policy/` has `never / on_request / unless_trusted / on_request_rule_request_permission`.
-- Commands are split at shell operators (`|`, `&&`, `;`, subshells) and **each segment** evaluated independently for sandbox + approval.
-- Escalation uses `sandbox_permissions: "require_escalated"` + `justification` — the *agent* must self-request, never message user first.
-- `prefix_rule` lets user persist approvals categorically (e.g. `["npm","run","dev"]`), but bans broad prefixes like `["python3"]` and **never** for destructive (`rm`).
+### 2.2 Guardian: autonomous approval review (fail-closed)
+`guardian/mod.rs` — when a command needs `on-request` approval, Codex spins up a **separate guardian review session** that reconstructs a compact transcript, assesses the exact planned action, and returns strict allow/deny JSON. **It fails closed** on timeout/failure/malformed output.
 
-**Takeaway:** our approval modes map cleanly:
-- `suggest` ≈ `never` + ask
-- `auto-edit` ≈ `unless_trusted`
-- `full-auto` ≈ `on_request` (trusted)
-We should add the "split command at shell operators, evaluate each segment" rule to our destructive-op guard.
+**Takeaway:** for `auto-edit` mode, we can route repeated/low-risk approvals through a quick self-review (re-state the action + risk, deny if ambiguous) instead of always pinging the user. Destructive ops never go to guardian — they stay human. This is smarter than our current "always ask".
 
-### 2.3 Multi-agent v2 = isolated contexts
-`tools/handlers/multi_agents_v2/` — `spawn / send_message / wait / list_agents / interrupt_agent / followup_task`. Subagents get isolated sessions, explicit message passing, and can be interrupted. This is the same pattern as Claude Code's fan-out.
+### 2.3 TokenBudget + RolloutBudget: hard cost ceiling
+`session/token_budget.rs` + `session/rollout_budget.rs` — a per-session token/rollout budget. When exceeded, `record_rollout_budget_usage` returns `SessionBudgetExceeded` and the turn terminates. Prevents runaway spend on a stuck weak model.
 
-**Takeaway:** our `delegate_task` children are already isolated. Document the spawn→message→wait→interrupt lifecycle as the canonical parallel pattern.
+**Takeaway:** add an explicit budget cap to our loop (e.g. max tokens or max tool-calls per task). On exceed → stop, report blocker. This is the Codex-level guard against the "weak model loops forever" failure we noted in benchmark.md.
 
-## 3. What we already have in Hermes (no code needed)
-| Mechanism | OpenCode/Codex | Hermes equivalent |
-|---|---|---|
-| Tool loop w/ feedback | core loop | terminal/execute_code + patch |
-| Subagent fan-out | Task tool / multi_agents_v2 | `delegate_task` |
-| Per-agent model | `model` field | Hermes profile / provider swap |
-| Approval gate | approval_policy | our approval modes |
-| Capacity limit | AgentExecutionLimiter | Hermes child cap |
-| Context compaction | `compaction.txt` | Hermes compression |
+### 2.4 Skills system + AGENTS.md
+`core/src/skills.rs` + `agents_md.rs` — Codex has its own skill loader (explicit @mention + implicit detection) and reads nearest `AGENTS.md` as project rules. Same shape as our skill + AGENTS.md template.
+
+**Takeaway:** confirms our AGENTS.md approach is industry-standard; keep it.
+
+### 2.5 Remote compaction
+`compact_remote_v2.rs` — offloads context compaction to a separate model call (keeps main context small). OpenCode only has local `compaction.txt`.
+
+**Takeaway (future):** if Hermes context gets large mid-task, a delegated compaction pass is cleaner than inline. Not urgent; note for v1.0+.
+
+## 3. Cross-validation: what each does better
+
+| Mechanism | OpenCode | Codex | What we adopt |
+|---|---|---|---|
+| Multi-agent | Task tool fan-out | multi_agents_v2 isolated | delegate_task (both agree) |
+| Plan/exec split | implicit in prompts | explicit ModeKind | explicit plan step (Codex clearer) |
+| Approval | ask-outside-whitelist | Guardian fail-closed | ask + optional self-review (Codex) |
+| Cost guard | `steps` field | Token/RolloutBudget | step cap + token/tool cap (both) |
+| Model per role | per-agent `model` | per-turn model | per-step hint (OpenCode) |
+| Compaction | local | remote v2 | local for now |
+| Project rules | AGENTS.md | AGENTS.md | AGENTS.md (both) |
+
+**Conclusion:** the two agents independently converge on the same skeleton (loop + feedback + delegation + budget + rules). That convergence *is* the proof the skeleton is correct. Differences are tuning: Codex is stronger on safety (Guardian) and cost-control (budget); OpenCode is cleaner on model-per-role. We take the union.
 
 ## 4. Gaps to close in hermes-code-agent
-1. **Make delegation default**, not optional, for non-trivial tasks.
-2. **Per-step model hint**: planner strong / executor cheap (where setup allows).
-3. **Command-segment approval**: evaluate each shell segment; ban broad persisted approvals for destructive cmds.
-4. **Bounded steps**: encourage a step cap to prevent runaway.
+1. Make delegation default (OpenCode + Codex agree).
+2. Per-step model hint (OpenCode).
+3. Command-segment approval + optional self-review for low-risk (Codex Guardian).
+4. Bounded steps + token/tool budget cap (both).
+5. Explicit plan step vs build step separation (Codex ModeKind).
+6. AGENTS.md as project rules (both).
 
-These become v0.2.0 changes to SKILL.md.
+Implemented incrementally: v0.2.0 (1-4 distilled), v0.3.0 (parallel template), v0.5.0 (5 + 2/3/4 reinforced).
