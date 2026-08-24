@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 1.1.0
+version: 1.2.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -48,11 +48,33 @@ Every implementation task goes through this. The agent must NOT report "done" un
 
 **Budget ceiling (from Codex Token/RolloutBudget):** cap the whole task at a budget — e.g. max 5 steps, max 5 red→fix cycles per step, and a soft tool-call cap (~40). On exceed, STOP and report a blocker. This is the guard against a weak model looping forever and burning tokens.
 
-**Gate rule (must be explicit in your reasoning):** "not green = not done." Never summarize past a red check. If a check is unavailable, say so and downgrade confidence — do not fake green.
+**Gate rule (exit-code semantics, v1.2.0):** "not green = not done" is now **machine-enforced**, not advisory. Run `python scripts/hca_gate.py verify` — exit 0 = green (may report done); **exit != 0 = HARD BLOCK: you must NOT report done.** Never summarize past a red gate. If the script is unavailable in this environment, fall back to running the project's tests manually and say so explicitly.
 
-**Doom-loop rule (from OpenCode processor.ts):** if you have made the SAME tool call with the SAME arguments 3 times in a row (same file, same edit, same result), STOP. The approach is not working — switch strategy or report the blocker. Do not burn your red→fix budget repeating an ineffective action.
+## Deterministic gate: scripts/hca_gate.py / 确定性门禁脚本（v1.2.0 核心）
 
-**Fast syntax gate (before full VERIFY):** after each BUILD edit, run a cheap single-file check when available — Python: `python -m py_compile <file>`; TS: `npx tsc --noEmit`; Go: `go vet <pkg>`. This catches syntax/type errors in seconds instead of waiting for the full test suite, shrinking each red→fix cycle.
+The punch-clock of the hard loop. Rules a model might forget become commands that always run. Stdlib-only Python; self-tested in `tests/test_hca_gate.py`. Call it at each stage instead of remembering prose rules:
+
+```bash
+python scripts/hca_gate.py detect          # CLARIFY: print detected test/lint/format commands
+python scripts/hca_gate.py snapshot        # before BUILD: record reversible git snapshot id
+python scripts/hca_gate.py plancheck       # after PLAN: exit!=0 if sources changed during planning → roll back
+python scripts/hca_gate.py quickcheck f.py # after each edit: seconds-level syntax gate
+python scripts/hca_gate.py doomcheck "edit:file:line"  # same tag 3x in a row → exit 2 = STOP this approach
+python scripts/hca_gate.py verify          # GATE: full tests; exit code is the verdict
+python scripts/hca_gate.py state show      # resume point: steps/redfix/doom/snapshots (.hca_state.json)
+```
+
+Exit-code contract (memorize ONE rule instead of twenty):
+
+| exit | meaning | your required action |
+|---|---|---|
+| 0 | GREEN | step may proceed; only `verify`=0 lets you report done |
+| 1 | RED | fix exactly what the digest shows; do NOT report done |
+| 2 | DOOM-LOOP | revert to last snapshot or switch strategy; patching again is forbidden |
+
+State lives in `.hca_state.json` (steps, red→fix counts, doom log, snapshot ids). After any context loss/compaction, run `state show` to restore discipline instantly. If state is stale (git HEAD moved), the script says so — run `state reset`.
+
+Doom-loop + revert protocol: when `doomcheck` exits 2, prefer `snapshot`-based rollback to the step's start point over stacking another patch on a broken diff.
 
 **API resilience (from OpenCode retry.ts):** when calling model APIs directly (curl/scripts), build in: max 5 retries, exponential backoff starting at 2s (×2), respect `retry-after` headers, and treat 429/5xx/network errors as retryable. Prefer non-streaming (`stream:false`) for long code generations through proxy gateways — streaming is prone to mid-stream drops.
 
@@ -103,9 +125,7 @@ OpenCode leads (harness architecture). Codex secondary (ModeKind/Guardian/Budget
 5. **Repo map before edits (Aider).** Before BUILD, build a lightweight structural index of the repo (symbol defs + import edges), rank by relevance to the current step, and feed the top-N symbols as context. Do NOT dump the whole tree. This gives automatic codebase awareness — the biggest context-efficiency win among all agents surveyed, and the direct antidote to "weak model gets lost in a large repo". Approximate Aider's PageRank repo map (`aider/repomap.py`, `nx.pagerank`).
 6. **Checkpoint before each BUILD step (Cline).** Before editing, take a reversible snapshot (e.g. `git stash` / worktree / copy) so a bad step can be undone. Cline proves per-step rollback (snapshot after every tool use, one-click restore) is a first-class safety rail — especially valuable for weak models that may make a destructive edit.
 7. **Model-aware context strategy (Gemini CLI).** If the active model has a large context window, prefer loading broadly (+ periodic compress) over aggressive pruning. If small-window, rely on the repo map (pattern 5). Gemini's 1M-token strategy is the opposite pole from OpenCode's compact-and-trim; pick per model. (Pi confirms the minimal-kernel + extension design — our skill stays thin orchestrator, not a monolith; no separate rule needed.)
-8. **Format after edit (OpenCode format.file).** If the project has a formatter (ruff/prettier/gofmt/rustfmt), run it after each BUILD edit and before VERIFY. This eliminates a whole class of cheap lint failures so the red→fix budget goes to real logic bugs.
-9. **Compact aggressively (OpenCode compaction numbers).** Tool outputs >2000 chars are summarized to their error lines; completed steps collapse to one status line each. Long sessions must stay within context — a compacted history beats an overflowed one.
-10. **Plan/build separation is verifiable (OpenCode plan permission).** After the PLAN step, run `git status`/`git diff` — if working files changed during planning, roll back those changes before BUILD. Planning writes only the plan artifact, never source edits.
+8. **Formatter / compaction / plan-separation are now in the script (v1.2.0).** `quickcheck` runs formatters, `verify --max-chars` trims output to error lines, `plancheck` enforces plan/build separation — see the Deterministic gate section. Former prose patterns 8–10 retired into code.
 
 ## Parallel execution (fan-out, from OpenCode Task tool) / 并行子代理
 

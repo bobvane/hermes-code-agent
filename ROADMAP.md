@@ -67,10 +67,16 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
   - **研究**: 克隆 sst/opencode 逐文件深读 + 6 篇技术文章交叉验证 → `references/opencode-deep-research.md`.
   - **SKILL.md 新增 4 条硬规则**: Doom-loop 熔断（同参同工具×3→STOP）; 快速语法门（py_compile/tsc 单文件秒级反馈）; API 韧性（指数退避+retry-after+非流式防波动）; **Parallel execution fan-out 章节**（delegate_task 编入硬循环: ≥2 独立文件改动触发、自包含 prompt、N builder+1 reviewer、并发≤3、合并后全量 VERIFY 才 GATE）.
   - **补齐能力**: 子 Agent fan-out（OpenCode Task tool 对标）正式入编.
+- **v1.2.0 — 确定性门禁脚本 (2026-08-25)**:
+  - **三方评审驱动**: 产品经理（能力差距清单）+ 架构师（scripts=harness 近似）+ 评论家（融合路线+反对清单）共识方案落地.
+  - **核心**: `scripts/hca_gate.py` 单入口 CLI — detect/snapshot/plancheck/quickcheck/doomcheck/verify/state 七个子命令; **exit-code 硬阻塞语义**（0=绿/1=红/2=死循环熔断）; `.hca_state.json` 状态外置（对抗会话压缩失忆，含 git HEAD stale 检测）.
+  - **散文规则退役入代码**: formatter/compaction 修剪/plan-build 分离从提示词规则编译为脚本必然执行.
+  - **自测**: `tests/test_hca_gate.py` 15 用例全绿（含"无测试命令时禁止假绿"、doom 阈值、redfix 计数、stale 检测）.
+  - **原则**: 凡能编译成 exit code 的规则绝不留在提示词里；凡需要判断力的规则绝不假装脚本能做.
 
 ## 當前版本 / Current version
 
-**v1.1.0** (2026-08-25): 深度源码研究落地 — fan-out 章节入编 + doom-loop/快速语法门/API 韧性三条硬规则.
+**v1.2.0** (2026-08-25): 确定性门禁脚本 hca_gate.py + exit-code 硬阻塞 GATE + 状态外置 .hca_state.json. 规则遵从与模型能力解耦.
 
 ## 下一步 / Next steps (optional)
 

@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Self-test for hca_gate.py — run: python tests/test_hca_gate.py"""
+
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+GATE = str(Path(__file__).resolve().parent.parent / "scripts" / "hca_gate.py")
+PASS = 0
+FAIL = 0
+
+
+def sh(cmd, cwd):
+    return subprocess.run([sys.executable, GATE] + cmd, cwd=cwd,
+                          capture_output=True, text=True)
+
+
+def check(name, cond, detail=""):
+    global PASS, FAIL
+    if cond:
+        PASS += 1
+        print(f"  ok  {name}")
+    else:
+        FAIL += 1
+        print(f" FAIL {name} {detail}")
+
+
+def fresh_git_repo():
+    d = Path(tempfile.mkdtemp(prefix="hca_test_"))
+    subprocess.run(["git", "init", "-q"], cwd=d)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "--allow-empty", "-qm", "init"], cwd=d)
+    return d
+
+
+# --- test 1: quickcheck green/red on Python files
+d = fresh_git_repo()
+(d / "good.py").write_text("x = 1\n")
+(d / "bad.py").write_text("def broken(:\n")
+r = sh(["quickcheck", "good.py"], d)
+check("quickcheck pass → exit 0", r.returncode == 0, r.stdout + r.stderr)
+r = sh(["quickcheck", "bad.py"], d)
+check("quickcheck syntax error → exit !=0",
+      r.returncode != 0 and "HCA-GATE-RED" in (r.stdout + r.stderr))
+shutil.rmtree(d)
+
+# --- test 2: doomcheck fires at threshold with same tag
+d = fresh_git_repo()
+tags = ["doomcheck", "doomcheck", "doomcheck"]
+codes = [sh([t, "edit:same:spot"], d).returncode for t in tags]
+check("doomcheck 3x same tag → exit 2 on third",
+      codes == [0, 0, 2], f"got {codes}")
+r = sh(["doomcheck", "different:action"], d)
+check("doomcheck different tag → exit 0", r.returncode == 0)
+shutil.rmtree(d)
+
+# --- test 3: verify fails hard when no tests exist (never fake green)
+d = fresh_git_repo()
+r = sh(["verify"], d)
+check("verify without any test command → RED (no fake green)",
+      r.returncode != 0 and "no test command" in r.stdout)
+shutil.rmtree(d)
+
+# --- test 4: verify passes a real pytest project / records state
+d = fresh_git_repo()
+(d / "pyproject.toml").write_text("[project]\nname='t'\n")
+(d / "tests").mkdir()
+(d / "tests" / "test_ok.py").write_text(
+    "def test_ok():\n    assert 1 == 1\n")
+r = sh(["verify"], d)
+st_file = d / ".hca_state.json"
+check("verify pytest pass → exit 0", r.returncode == 0,
+      r.stdout[-300:])
+check("state file written", st_file.exists())
+if st_file.exists():
+    st = json.loads(st_file.read_text())
+    check("git_head recorded in state", bool(st.get("git_head")))
+
+# --- test 5: verify red increments redfix counter
+(d / "tests" / "test_bad.py").write_text(
+    "def test_bad():\n    assert 1 == 2\n")
+codes = []
+for _ in range(2):
+    r = sh(["verify"], d)
+    codes.append(r.returncode)
+st = json.loads(st_file.read_text())
+check("verify red → exit !=0 twice", all(c != 0 for c in codes))
+check("redfix counter incremented to 2",
+      st.get("redfix", {}).get("verify") == 2, str(st.get("redfix")))
+
+# --- test 6: plancheck detects source edits during PLAN
+subprocess.run(["git", "add", "-A"], cwd=d)
+subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                "commit", "-qm", "wip"], cwd=d)
+(d / "src_edit.py").write_text("y = 2\n")
+r = sh(["plancheck"], d)
+check("plancheck flags new source file → exit !=0",
+      r.returncode != 0 and "PLAN step must not modify" in r.stdout)
+(d / "src_edit.py").unlink()
+r = sh(["plancheck"], d)
+check("plancheck clean tree → exit 0", r.returncode == 0)
+
+# --- test 7: state stale detection after head moves
+st = json.loads(st_file.read_text())
+st["git_head"] = "0" * 40
+st_file.write_text(json.dumps(st))
+r = sh(["state", "show"], d)
+check("stale state detected → exit !=0", r.returncode != 0)
+r = sh(["state", "reset"], d)
+check("state reset works", r.returncode == 0)
+
+# --- test 8: snapshot records ids
+subprocess.run(["git", "add", "-A"], cwd=d)
+subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                "commit", "-qm", "wip2"], cwd=d)
+r = sh(["snapshot"], d)
+st = json.loads((d / ".hca_state.json").read_text())
+check("snapshot recorded", r.returncode == 0 and len(st["snapshots"]) >= 1)
+
+shutil.rmtree(d)
+
+print(f"\n{PASS} passed, {FAIL} failed")
+sys.exit(1 if FAIL else 0)
