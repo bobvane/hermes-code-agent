@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hca_gate.py — hermes-code-agent deterministic gate CLI (v1.2.0)
+"""hca_gate.py — hermes-code-agent deterministic gate CLI (v1.2.1)
 
 The "punch clock" of the hard verify loop. Rules that a model might forget
 become commands that always run. Exit-code semantics are the contract:
@@ -15,6 +15,9 @@ Subcommands:
     state [show|reset|bump KEY]  Persistent loop state (.hca_state.json)
     plancheck           Verify plan/build separation: fail if source changed in PLAN
     doomcheck TAG       Doom-loop detection: same TAG 3x in a row → exit 2
+    guard record|check  Judge/test file integrity (anti-tamper oracle hashes)
+
+Exit codes: 0 green · 1 red/blocked · 2 doom stop · 3 judge tampered
 
 Stdlib only. No third-party dependencies. Python 3.8+.
 """
@@ -224,7 +227,23 @@ def trim_output(text, max_chars):
     return trimmed
 
 
+def venv_python_hint():
+    """Return a concrete fix command if a project-local venv has the runner."""
+    for py in (".venv/bin/python", "venv/bin/python"):
+        p = Path(py)
+        if p.exists():
+            return f"{py} -m pytest -q"
+    return None
+
+
 def cmd_verify(args):
+    # judge integrity check first: tampered oracle = automatic RED (exit 3)
+    st = load_state()
+    if st.get("judge_hashes"):
+        rc, out = run([sys.executable, __file__, "guard", "check"], timeout=30)
+        if rc == 3:
+            print(out)          # surface TAMPER details to the agent
+            sys.exit(3)
     cmds = detect_commands()["test"]
     if not cmds:
         fail("no test command detected — ask the user; do NOT fake green")
@@ -244,8 +263,31 @@ def cmd_verify(args):
     if unavailable and not failures:
         print("[HCA-GATE] test runner(s) unavailable: "
               + ", ".join(unavailable))
-        fail("cannot run verification — install the runner or ask the user; "
-             "do NOT fake green")
+        hint = venv_python_hint()
+        if hint:
+            rc2, out2 = run(hint.split(), timeout=600)
+            if rc2 == 0:
+                st = load_state()
+                st["git_head"] = current_head()
+                save_state(st)
+                ok(f"full verify passed (via project venv: {hint})")
+            if rc2 != 127 and "No module named" not in out2:
+                print(f"[HCA-GATE] retried with `{hint}` → "
+                      + ("FAILED, digest below" if rc2 != 0 else "PASS"))
+                if rc2 != 0:
+                    failures.append((hint, trim_output(out2, args.max_chars)))
+            if not failures:
+                print(f"[HCA-GATE] FIX: install the runner, e.g.\n"
+                      f"  {hint.split()[0]} -m ensurepip --upgrade\n"
+                      f"  or: uv pip install pytest   (then re-run verify)")
+        else:
+            print("[HCA-GATE] FIX: no .venv found. Create one and install "
+                  "the runner:\n"
+                  "  uv venv .venv && uv pip install pytest\n"
+                  "  then re-run verify (it will auto-use .venv/bin/python)")
+        if not failures:
+            fail("cannot run verification — install the runner first; "
+                 "do NOT fake green")
     if failures:
         for c, trimmed in failures:
             print(f"\n[VERIFY-RED] `{c}` failed. Error digest:\n{trimmed}")
@@ -317,6 +359,61 @@ def cmd_plancheck(_args):
 
 # ---------------------------------------------------------------- doomcheck
 
+# --------------------------------------------------------------------- guard
+
+GUARDED_GLOBS = ("test_*.py", "tests/test_*.py", "tests/*.py",
+                 "*judge*.py", "*conftest.py")
+
+
+def _guarded_files():
+    files = set()
+    for pat in GUARDED_GLOBS:
+        for p in Path().rglob(pat.replace("tests/", "tests/")):
+            sp = str(p)
+            if (".venv" not in sp and "node_modules" not in sp
+                    and "__pycache__" not in sp):
+                files.add(sp)
+    return sorted(files)
+
+
+def cmd_guard(args):
+    """Record or check integrity hashes of judge/test files.
+
+    guard record  → snapshot hashes into state (call once, before BUILD)
+    guard check   → exit !=0 if any guarded file changed since recording
+    """
+    st = load_state()
+    if state_stale(st):
+        fail("state stale — run: hca_gate.py state reset")
+    hashes = {f: hashlib.sha256(Path(f).read_bytes()).hexdigest()[:16]
+              for f in _guarded_files()}
+    if args.guard_cmd == "record":
+        st["judge_hashes"] = hashes
+        st["git_head"] = current_head()
+        save_state(st)
+        ok(f"recorded {len(hashes)} judge file hash(es)")
+    # check
+    old = st.get("judge_hashes")
+    if not old:
+        print("[HCA-GATE] no recorded judge hashes — run "
+              "`hca_gate.py guard record` before BUILD, then re-check")
+        sys.exit(1)
+    tampered = [f for f, h in old.items()
+                if not Path(f).exists()
+                or hashlib.sha256(Path(f).read_bytes()).hexdigest()[:16] != h]
+    if tampered:
+        for f in tampered:
+            exists = Path(f).exists()
+            print(f"[HCA-GATE-TAMPER] {f} "
+                  + ("deleted" if not exists else "modified after recording"))
+        print("Judge/test files are the ORACLE — modifying them to make "
+              "tests pass is cheating, not fixing. RESTORE them "
+              "(git restore <file> / re-create from task spec) and fix the "
+              "IMPLEMENTATION instead.")
+        sys.exit(3)
+    ok(f"{len(old)} judge file(s) intact")
+
+
 def cmd_doomcheck(args):
     """Call with a stable tag describing the action, e.g. 'edit:impl_a.py:42'.
     Same tag DOOM_THRESHOLD times in a row → exit 2 (hard stop signal)."""
@@ -366,11 +463,14 @@ def main():
     d = sub.add_parser("doomcheck", help="doom-loop detection by action tag")
     d.add_argument("tag")
 
+    g = sub.add_parser("guard", help="judge/test file integrity: record|check")
+    g.add_argument("guard_cmd", choices=["record", "check"])
+
     args = ap.parse_args()
     table = {"detect": cmd_detect, "snapshot": cmd_snapshot,
              "quickcheck": cmd_quickcheck, "verify": cmd_verify,
              "state": cmd_state, "plancheck": cmd_plancheck,
-             "doomcheck": cmd_doomcheck}
+             "doomcheck": cmd_doomcheck, "guard": cmd_guard}
     table[args.cmd](args)
 
 

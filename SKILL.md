@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 1.2.0
+version: 1.2.1
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -15,9 +15,11 @@ metadata:
 # Hermes Code Agent — 硬验证循环
 
 > **Hermes 代码助手（自纠错编程工作流）**
-> 把 Hermes 变成一个会自己纠错的编程智能体：用「先验证、后完成」的硬循环（实现→测试/校验→修复→全绿才算完成）包裹模型，让弱到中档模型也能稳定产出可靠代码。
+> 把 Hermes 变成一个会自己纠错的编程智能体：用「先验证、后完成」的硬循环（实现→测试/校验→修复→全绿才算完成）包裹模型，让中档及以上模型的产出可靠、可验证。弱模型（<8B 激活参数）可用但属**实验性**——实测它们会绕过门禁甚至篡改测试凑绿，结果不作担保。
 
-Turn Hermes into a self-correcting coding agent. The model alone is a "weak coder"; this skill is the harness that makes weak-to-mid models punch above their weight by forcing a **verify-before-done** loop instead of one-shot code dumping.
+Turn Hermes into a self-correcting coding agent. The model alone — **at any tier** — will sometimes declare "done" on a red build or a missing file; this skill is the harness that forces a **verify-before-done** loop with machine-enforced gates (exit codes, not prompts), making mid-to-large models reliably correct.
+
+**Model support policy（模型支持门槛）**: designed for coding-specialized models ≥8B active params or general models ≥24B. Smaller models may run it experimentally (gates still block faked greens and tampered tests), but convergence is NOT guaranteed — empirically, sub-8B models fail via context collapse or oracle-tampering, which no harness can fully prevent.
 
 Cross-validated against two open-source agents read at equal depth: **OpenCode** (model-agnostic harness, LSP feedback, subagent fan-out, per-agent model) and **OpenAI Codex CLI** (ModeKind plan/exec split, Guardian fail-closed approval, Token/RolloutBudget cost ceiling). See `references/inspiration.md`.
 
@@ -50,17 +52,18 @@ Every implementation task goes through this. The agent must NOT report "done" un
 
 **Gate rule (exit-code semantics, v1.2.0):** "not green = not done" is now **machine-enforced**, not advisory. Run `python scripts/hca_gate.py verify` — exit 0 = green (may report done); **exit != 0 = HARD BLOCK: you must NOT report done.** Never summarize past a red gate. If the script is unavailable in this environment, fall back to running the project's tests manually and say so explicitly.
 
-## Deterministic gate: scripts/hca_gate.py / 确定性门禁脚本（v1.2.0 核心）
+## Deterministic gate: scripts/hca_gate.py / 确定性门禁脚本（v1.2.1 核心）
 
 The punch-clock of the hard loop. Rules a model might forget become commands that always run. Stdlib-only Python; self-tested in `tests/test_hca_gate.py`. Call it at each stage instead of remembering prose rules:
 
 ```bash
 python scripts/hca_gate.py detect          # CLARIFY: print detected test/lint/format commands
 python scripts/hca_gate.py snapshot        # before BUILD: record reversible git snapshot id
+python scripts/hca_gate.py guard record    # before BUILD: seal judge/test files with integrity hashes
 python scripts/hca_gate.py plancheck       # after PLAN: exit!=0 if sources changed during planning → roll back
 python scripts/hca_gate.py quickcheck f.py # after each edit: seconds-level syntax gate
 python scripts/hca_gate.py doomcheck "edit:file:line"  # same tag 3x in a row → exit 2 = STOP this approach
-python scripts/hca_gate.py verify          # GATE: full tests; exit code is the verdict
+python scripts/hca_gate.py verify          # GATE: full tests + judge-integrity check; exit code is the verdict
 python scripts/hca_gate.py state show      # resume point: steps/redfix/doom/snapshots (.hca_state.json)
 ```
 
@@ -71,8 +74,11 @@ Exit-code contract (memorize ONE rule instead of twenty):
 | 0 | GREEN | step may proceed; only `verify`=0 lets you report done |
 | 1 | RED | fix exactly what the digest shows; do NOT report done |
 | 2 | DOOM-LOOP | revert to last snapshot or switch strategy; patching again is forbidden |
+| 3 | JUDGE TAMPERED | the oracle (test/judge file) was modified or deleted after `guard record`. NEVER edit tests to make them pass — restore them (`git restore <file>`) and fix the IMPLEMENTATION. Modifying the oracle is cheating, not debugging. |
 
-State lives in `.hca_state.json` (steps, red→fix counts, doom log, snapshot ids). After any context loss/compaction, run `state show` to restore discipline instantly. If state is stale (git HEAD moved), the script says so — run `state reset`.
+`verify` auto-runs the judge-integrity check when hashes are recorded. If pytest is missing, verify retries via a project-local `.venv/bin/python` automatically and prints concrete FIX commands on failure — follow them instead of re-running blindly.
+
+State lives in `.hca_state.json` (steps, red→fix counts, doom log, snapshot ids, judge hashes). After any context loss/compaction, run `state show` to restore discipline instantly. If state is stale (git HEAD moved), the script says so — run `state reset`.
 
 Doom-loop + revert protocol: when `doomcheck` exits 2, prefer `snapshot`-based rollback to the step's start point over stacking another patch on a broken diff.
 

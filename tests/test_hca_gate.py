@@ -70,9 +70,16 @@ d = fresh_git_repo()
 (d / "tests").mkdir()
 (d / "tests" / "test_ok.py").write_text(
     "def test_ok():\n    assert 1 == 1\n")
+# provide a project-local venv whose python has pytest, so verify can
+# self-bootstrap onto it regardless of the outer environment
+venv_py = d / ".venv" / "bin"
+venv_py.mkdir(parents=True)
+venv_py.joinpath("python").write_text(
+    "#!/bin/sh\nexec " + sys.executable + " \"$@\"\n")
+venv_py.joinpath("python").chmod(0o755)
 r = sh(["verify"], d)
 st_file = d / ".hca_state.json"
-check("verify pytest pass → exit 0", r.returncode == 0,
+check("verify pytest pass (venv bootstrap) → exit 0", r.returncode == 0,
       r.stdout[-300:])
 check("state file written", st_file.exists())
 if st_file.exists():
@@ -120,6 +127,41 @@ r = sh(["snapshot"], d)
 st = json.loads((d / ".hca_state.json").read_text())
 check("snapshot recorded", r.returncode == 0 and len(st["snapshots"]) >= 1)
 
+shutil.rmtree(d)
+
+# --- test 9: guard record/check detects judge tampering
+d = fresh_git_repo()
+(d / "pyproject.toml").write_text("[project]\nname='t'\n")
+(d / "tests").mkdir()
+judge = d / "tests" / "test_ok.py"
+judge.write_text("def test_ok():\n    assert 1 == 1\n")
+r = sh(["guard", "record"], d)
+check("guard record → exit 0", r.returncode == 0)
+r = sh(["guard", "check"], d)
+check("guard check clean → exit 0", r.returncode == 0)
+# tamper: modify the oracle
+judge.write_text("def test_ok():\n    assert True  # weakened\n")
+r = sh(["guard", "check"], d)
+check("guard check tampered → exit 3 + TAMPER msg",
+      r.returncode == 3 and "TAMPER" in r.stdout)
+# verify must refuse (exit 3) when oracle tampered
+r = sh(["verify"], d)
+check("verify with tampered judge → exit 3",
+      r.returncode == 3 and "TAMPER" in r.stdout)
+# restore and confirm clean
+judge.write_text("def test_ok():\n    assert 1 == 1\n")
+r = sh(["guard", "check"], d)
+check("guard check after restore → exit 0", r.returncode == 0)
+
+# --- test 10: verify unavailable runner prints concrete FIX with .venv
+d = fresh_git_repo()
+(d / "pyproject.toml").write_text("[project]\nname='t'\n")
+(d / "tests").mkdir()
+(d / "tests" / "test_x.py").write_text("def test_x():\n    assert 1\n")
+r = sh(["verify"], d)  # system python lacks pytest in this venv-less repo
+out = r.stdout
+check("verify w/o runner → RED with FIX hint or venv retry",
+      r.returncode != 0 and ("FIX:" in out or "venv" in out), out[-300:])
 shutil.rmtree(d)
 
 print(f"\n{PASS} passed, {FAIL} failed")
