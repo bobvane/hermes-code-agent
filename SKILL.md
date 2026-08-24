@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Model-agnostic, plan-source-agnostic, works with or without an upstream planner (omh/AGENTS.md/raw instruction)."
-version: 0.3.0
+version: 0.4.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]

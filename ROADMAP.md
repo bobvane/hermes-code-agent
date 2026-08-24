@@ -51,4 +51,5 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 - v0.1.0 — initial skill skeleton: hard loop, stage-worker routing, approval modes, context mgmt, optional-plan handling.
 - v0.2.0 — distilled OpenCode/Codex mechanisms into SKILL.md: delegate-by-default, per-step model hint, command-segment approval, bounded loop. Added `references/inspiration.md` (source analysis).
-- v0.3.0 — added `references/benchmark.md` (weak-model loop validation) and `references/parallel-implement-review.md` (reusable builder+reviewer delegate_task prompts); SKILL.md now links both.
+- v0.3.0 — prior session: added `references/agent-mechanism-extraction.md` (mechanism notes) + `scripts/make_bugbench.py` (benchmark harness). *(Published without a report to user; recorded here for continuity.)*
+- v0.4.0 — added `references/benchmark.md` (weak-model loop validation, honest limits) and `references/parallel-implement-review.md` (reusable builder+reviewer delegate_task prompts); SKILL.md links both; version bumped to 0.4.0.
