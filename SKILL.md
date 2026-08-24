@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Model-agnostic, plan-source-agnostic, works with or without an upstream planner (omh/AGENTS.md/raw instruction)."
-version: 0.1.0
+version: 0.2.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -52,6 +52,15 @@ When the step needs it, load the matching skill instead of re-inventing instruct
 | Parallel implement + review | `delegate_task` (one builder + one reviewer, isolated contexts) |
 
 If the skill is not installed, fall back to the behavior described inline — do not block.
+
+## Advanced patterns (distilled from OpenCode & Codex CLI)
+
+These came from reading the open-source agents (see `references/inspiration.md`). They are defaults, not options.
+
+1. **Delegate by default for non-trivial tasks.** Do not implement + review in the same head. Use `delegate_task`: one builder agent (isolated context) + one reviewer agent, run in parallel, then reconcile. Matches OpenCode's Task-tool fan-out and Codex's `multi_agents_v2` (spawn → send_message → wait → interrupt).
+2. **Per-step model hint (where setup allows).** If the user's Hermes config has more than one model, prefer a stronger model for planning/architecture steps and a cheaper one for mechanical edit/execute steps. OpenCode does this via a per-agent `model` field; we approximate via profile/provider swap at step boundaries.
+3. **Command-segment approval.** When about to run a shell command, split it at shell operators (`|`, `&&`, `||`, `;`, subshells) and evaluate EACH segment for danger. Destructive segments (`rm`, `git reset --hard`, `drop`, force flags) ALWAYS require explicit user confirm — never auto-approve, never persist a broad approval rule for them. Borrowed from Codex's `approval_policy` state machine.
+4. **Bound the loop.** Set a step cap per task (e.g. 3-5 steps) and a red→fix cap (5 cycles). Prevents runaway. OpenCode encodes this via a `steps` field; we enforce it in the loop above.
 
 ## Approval modes (borrowed from Codex CLI)
 

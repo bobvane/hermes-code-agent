@@ -50,3 +50,4 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 ## Status
 
 - v0.1.0 — initial skill skeleton: hard loop, stage-worker routing, approval modes, context mgmt, optional-plan handling.
+- v0.2.0 — distilled OpenCode/Codex mechanisms into SKILL.md: delegate-by-default, per-step model hint, command-segment approval, bounded loop. Added `references/inspiration.md` (source analysis).
