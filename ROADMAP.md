@@ -73,12 +73,33 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
   - **散文规则退役入代码**: formatter/compaction 修剪/plan-build 分离从提示词规则编译为脚本必然执行.
   - **自测**: `tests/test_hca_gate.py` 15 用例全绿（含"无测试命令时禁止假绿"、doom 阈值、redfix 计数、stale 检测）.
   - **原则**: 凡能编译成 exit code 的规则绝不留在提示词里；凡需要判断力的规则绝不假装脚本能做.
+- **v1.2.1 — guard 反作弊门禁 + 模型门槛声明 (2026-08-25)**:
+  - **实证驱动**: 4 组 A/B 实验（laguna-s-2.1 / ministral-8b / qwen3-8b）暴露三类失败模式: 强模型无 harness 假报完成、弱模型上下文崩溃、弱模型篡改裁判凑绿.
+  - **guard record|check**: judge/test 文件 sha256 封存, 篡改/删除 → exit 3 + TAMPER 提示; verify 自动执行完整性检查.
+  - **verify venv 自举**: runner 缺失时自动尝试 `.venv/bin/python` 重跑, 并输出具体 FIX 命令, 不再让模型盲试.
+  - **叙事重构 (四方评审共识)**: 主卖点改为「对一切模型的完成性验证」; 弱模型降级为实验性, 明示支持门槛(编码≥8B激活/通用≥24B).
+  - **自测**: 21 用例全绿.
 
 ## 當前版本 / Current version
 
-**v1.2.0** (2026-08-25): 确定性门禁脚本 hca_gate.py + exit-code 硬阻塞 GATE + 状态外置 .hca_state.json. 规则遵从与模型能力解耦.
+**v1.2.1** (2026-08-25): guard 反作弊门禁(exit 3) + verify venv 自举 + 模型支持门槛声明. 自测 21/21.
+
+## 後續升級目標 / Post-v1.2.1 goals (decided 2026-08-25)
+
+**战略定位**: 只正式支持中强模型（编码特化 ≥8B 激活参数 / 通用 ≥24B），弱模型实验性不担保。目标：让中强模型编程**更准确、成本效率更高**。
+
+**目标体系（四方评审收敛）**:
+
+| 目标 | 定义（可测） | 度量方式 |
+|---|---|---|
+| 北极星: 难题首过率 | N 道难题上 harness 开启后的首次全绿率 | 固定基准协议 A/B |
+| 约束: 成本效率 | tokens/题 + wall-clock/题 + 红→修轮次不劣化 | 同一次基准跑产出 |
+
+- **简洁性降级为约束项**: 只在全绿前提下优化（diff 最小化、simplify-code 集成），不得为简洁牺牲正确性。
+- **泛化鲁棒性为观察项**: 跨语言/跨框架稳定性，暂不定指标。
+- **方法论红线**: 先基线后改动——用 skill-ab-benchmark 固定协议（固定题集+裁判+N次均值）跑出 v1.2.1 基线数字；之后每版只追一个目标做 A/B，四线并进不可接受。
 
 ## 下一步 / Next steps (optional)
 
-- 將 Skill 實際安裝進 `~/.hermes/skills/` 讓用戶在真實編碼中驗證.
-- v1.x+: 評估 Hermes plugin / ACP-server 變體, 實現程序級硬門禁(而非僅 prompt 層約束).
+1. **基线工程**: 把 skill-ab-benchmark 固化为可重复协议（固定 seed/题集/N 次），跑出 v1.2.1 的首过率与 tokens/题基线，写入 benchmarks/.
+2. v1.3+: 以基线为参照逐版验证单目标边际收益；评估 Hermes plugin / ACP-server 程序级硬门禁.
