@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 0.9.0
+version: 0.11.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -33,6 +33,7 @@ Every implementation task goes through this. The agent must NOT report "done" un
 
 ```text
 1. CLARIFY SCOPE   — what file(s)/behavior change? what does "done" mean (test? lint? run)?
+                      Detect the test/lint/build command from repo signals (see Zero-config section) before asking; only ask if undetectable.
 2. PLAN (separate mode) — switch to PLAN cognition: explore, read relevant files, decide approach.
                       Output a 3-5 step mini-plan. Do NOT edit code in this step.
                       (If an upstream plan exists, consume it and skip to step 3.)
@@ -48,6 +49,27 @@ Every implementation task goes through this. The agent must NOT report "done" un
 **Budget ceiling (from Codex Token/RolloutBudget):** cap the whole task at a budget — e.g. max 5 steps, max 5 red→fix cycles per step, and a soft tool-call cap (~40). On exceed, STOP and report a blocker. This is the guard against a weak model looping forever and burning tokens.
 
 **Gate rule (must be explicit in your reasoning):** "not green = not done." Never summarize past a red check. If a check is unavailable, say so and downgrade confidence — do not fake green.
+
+## Zero-config by default（零配置，无需 AGENTS.md）
+
+> 本 Skill 安装一次即可使用，不需要为任何项目复制文件。
+> Install once, zero-config. No per-project file copying required.
+
+**Universal safety rules（内置硬性安全规则，无需外部文件）** — always enforced, with or without an AGENTS.md:
+- Run the project's test/lint/build and reach green before reporting "done" (the GATE rule above).
+- Never commit secrets or `.env` files.
+- Never `force` push to `main`/`master` (or the repo's protected branch).
+- Destructive ops (push, rm -rf, drop, force flags) always need explicit user confirm (see Approval modes).
+
+**Auto-detect project commands（自动探测命令，不依赖手写配置）** — in CLARIFY/VERIFY, detect the test/lint/build command from repo signals before asking:
+- Python: `pytest` / `python -m pytest` (look for `pyproject.toml`, `pytest.ini`, `tests/`); lint `ruff`/`flake8` if present.
+- Node: `npm test` / `npm run lint` / `npm run build` (read `package.json` scripts).
+- Go: `go test ./...` / `go vet ./...`.
+- Rust: `cargo test` / `cargo clippy`.
+- Has a `Makefile`? prefer `make test` / `make lint` / `make build`.
+- If detection is ambiguous or the user stated a command, use that. Only ask in CLARIFY if truly undetectable.
+
+**AGENTS.md is now fully optional（AGENTS.md 仅为可选覆盖）** — `templates/AGENTS.md` is NOT required. The skill already enforces the above by itself. Use AGENTS.md ONLY to *override* auto-detected defaults or add project-specific conventions (naming, layout, out-of-scope). If present at repo root, the skill consumes it as an override; if absent, it runs identically.
 
 ## Stage workers (call these, don't duplicate them)
 
@@ -99,8 +121,8 @@ If the conversation already contains a structured plan (from omh, a written AGEN
 
 ## Quick start for the user
 
-1. Drop `hermes-code-agent/` into `~/.hermes/skills/`.
-2. (Optional) copy `templates/AGENTS.md` into your repo to set project rules.
-3. In chat: "build X", "fix bug in Y", "refactor Z" — the loop runs automatically.
+1. Drop `hermes-code-agent/` into `~/.hermes/skills/` (or your Hermes skills dir). **That's it — zero config.**
+2. In chat: "build X", "fix bug in Y", "refactor Z" — the loop runs automatically. Safety rules and test/lint commands are built-in.
+3. (Optional) If you want project-specific overrides (e.g. a non-standard test command or extra conventions), copy `templates/AGENTS.md` into that repo and edit it. **This step is NOT required** — the skill auto-detects commands and enforces safety on its own.
 
 See `ROADMAP.md` for the project's intent and the `references/` folder for command templates.

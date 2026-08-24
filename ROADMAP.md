@@ -65,9 +65,13 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 - **v0.8.0** — 强模型实测：切 claude-sonnet-4.5 跑新题（LRU+TTL 线程安全缓存）。A 组裸写 7/7 一次全对，B 组硬循环 7/7 首轮全绿零修复。删除旧题（并发 KV 缓存）固化，只留新题。结论：强模型下 Skill 边际价值趋零。
 - **v0.9.0** — 补测 hy3-free 同题（LRU+TTL）数据，修正跨题对比方法论。新增「严格同题对比」：hy3-free 与 claude-sonnet-4.5 同跑 LRU+TTL 均 7/7 / 红修=0。结论修正为：Skill 价值由「模型档次 × 题目难度」交互决定，非单纯模型档次。
 
+- **v0.10.0** — 文档收尾：README 改为中文主体 + 英文补充；ROADMAP/SKILL.md 补中文副标题与 v0.7~v0.9 状态；SKILL.md version 对齐到 0.9.0。
+
+- **v0.11.0** — **产品设计修正（零配置）**：根据用户反馈，AGENTS.md 不应是"每个项目复制一次"的必需文件。Skill 现已**内置安全规则 + 自动探测测试/lint/构建命令**，安装一次即可无感使用；AGENTS.md 降级为纯可选覆盖（仅用于覆盖自动探测默认值或加项目专属约定）。templates/AGENTS.md 保留作可选模板，但 Quick start 不再要求复制。CLARIFY 步骤加入"先探测命令再问"。
+
 ## 当前版本 / Current version
 
-**v0.9.0**（SKILL.md frontmatter 已同步）。项目说明文件（README / ROADMAP / SKILL.md / benchmarks/README.md）均以中文为主体，英文为辅助参考。
+**v0.11.0**（SKILL.md frontmatter 待同步）。项目说明文件均以中文为主体。
 
 ## 下一步（建议 / Next steps, optional）
 
