@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
-description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Model-agnostic, plan-source-agnostic, works with or without an upstream planner (omh/AGENTS.md/raw instruction)."
-version: 0.5.0
+description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
+version: 0.6.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -59,14 +59,18 @@ When the step needs it, load the matching skill instead of re-inventing instruct
 
 If the skill is not installed, fall back to the behavior described inline — do not block.
 
-## Advanced patterns (distilled from OpenCode & Codex CLI, cross-validated)
+## Advanced patterns (distilled from 6 open agents, OpenCode primary)
 
-These came from reading both open-source agents at equal depth (see `references/inspiration.md`). They are defaults, not options.
+OpenCode leads (harness architecture). Codex secondary (ModeKind/Guardian/Budget). This
+round adds Aider, Cline, Gemini CLI, Pi — see `references/extra-distillation.md`. Defaults, not options.
 
 1. **Delegate by default for non-trivial tasks.** Do not implement + review in the same head. Use `delegate_task`: one builder agent (isolated context) + one reviewer agent, run in parallel, then reconcile. Use the reusable prompts in `references/parallel-implement-review.md`. Both OpenCode (Task tool) and Codex (multi_agents_v2) converge on this.
 2. **Per-step model hint (where setup allows).** If the user's Hermes config has more than one model, prefer a stronger model for PLAN/architecture steps and a cheaper one for BUILD/execute steps. OpenCode does this via a per-agent `model` field; we approximate via profile/provider swap at step boundaries.
 3. **Command-segment approval + low-risk self-review.** Split shell commands at operators (`|`, `&&`, `||`, `;`, subshells) and evaluate EACH segment. Destructive segments (`rm`, `git reset --hard`, `drop`, force flags) ALWAYS need explicit user confirm — never auto-approve. For *non-destructive, repeated* approvals in `auto-edit` mode, apply a quick self-review (re-state the action + risk; deny if ambiguous) instead of pinging the user every time — borrowed from Codex's Guardian (fail-closed) pattern; destructive ops never go to self-review.
 4. **Bound the loop + budget.** Step cap (3-5), red→fix cap (5/step), and a soft tool-call cap (~40). On exceed → stop, report blocker. OpenCode encodes this via a `steps` field; Codex via Token/RolloutBudget. We enforce both.
+5. **Repo map before edits (Aider).** Before BUILD, build a lightweight structural index of the repo (symbol defs + import edges), rank by relevance to the current step, and feed the top-N symbols as context. Do NOT dump the whole tree. This gives automatic codebase awareness — the biggest context-efficiency win among all agents surveyed, and the direct antidote to "weak model gets lost in a large repo". Approximate Aider's PageRank repo map (`aider/repomap.py`, `nx.pagerank`).
+6. **Checkpoint before each BUILD step (Cline).** Before editing, take a reversible snapshot (e.g. `git stash` / worktree / copy) so a bad step can be undone. Cline proves per-step rollback (snapshot after every tool use, one-click restore) is a first-class safety rail — especially valuable for weak models that may make a destructive edit.
+7. **Model-aware context strategy (Gemini CLI).** If the active model has a large context window, prefer loading broadly (+ periodic compress) over aggressive pruning. If small-window, rely on the repo map (pattern 5). Gemini's 1M-token strategy is the opposite pole from OpenCode's compact-and-trim; pick per model. (Pi confirms the minimal-kernel + extension design — our skill stays thin orchestrator, not a monolith; no separate rule needed.)
 
 ## Approval modes (borrowed from Codex CLI)
 
