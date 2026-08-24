@@ -1,69 +1,113 @@
 # Hermes Code Agent
 
-> **Hermes 代码助手（自纠错编程工作流）**
-> 把 Hermes 变成一个会自己纠错的编程智能体：用「先验证、后完成」的硬循环包裹模型，让弱到中档模型也能稳定产出可靠代码。
-> 项目说明以中文为主体，英文为辅助参考。
+> **Hermes 代码助手** — 一个让 Hermes 编程更靠谱的 Skill。安装一次即可使用，零配置。
+> 
+> 把 Hermes 变成一个**会自己纠错**的编程智能体：通过「实现→校验→修复→全绿才完成」的硬循环，把弱到中档模型在真实编程题上的表现，拉平到一流开源编码 agent（OpenCode / Aider / Codex）的水准。
 
-Make Hermes a self-correcting coding agent. A packaging of the verify-before-done loop that powers tools like OpenCode / Claude Code / Codex — as a plain Hermes skill, model-agnostic and planner-agnostic.
+## 这是什么? / What is this?
 
-## 为什么需要它 / Why
+一个 **自纠错编程工作流** 打包成 Hermes Skill。
 
-编程智能体之所以「强」，不是因为模型本身，而是因为它把模型包在一个**有真实反馈的窄工具循环**里：编辑 → 运行 → 看报错 → 修复 → 重跑。一个中/弱模型一旦进入这个循环，表现会远超它裸聊的水平。本 Skill 就是把这个循环给到 Hermes。
+**核心洞察**：编程能力的提升来自**「验证循环」** 而非单纯的模型档次。Claude Code / OpenCode / Aider 看起来「强」，很大部分是因为它们把模型塞在一个有真实反馈（跑测试 → 报错 → 修复 → 重跑）的窄工具环里。本技能把这个环给 Hermes，让一个普通模型也能写出能被测试覆盖、能被绿点验证的代码。
 
-Coding agents feel "strong" not because of the model alone, but because they wrap the model in a **narrow tool loop with real feedback**: edit → run → see error → fix → re-run. A mid/weak model inside that loop performs far above its bare-chat level. This skill gives Hermes the same loop.
+- **对比6个开源 agent** 阅读并提炼机制 (OpenCode 主体, Codex/Aider/Cline/Gemini CLI/Pi 补充)
+- **模型无关**：用你 Hermes 配置的任意模型，包括本地部署的
+- **零配置**：安装到 `skills/` 就能用，自动探测项目的 build/test/lint 命令
+- **硬安全规则内置**：不会提交密钥，不会 force push，破坏性操作需确认
 
-本 Skill **不替代** Hermes 既有的开发类 Skill（`test-driven-development`、`systematic-debugging`、`requesting-code-review`、`simplify-code`），而是把它们当作**阶段工人（stage workers）**来编排，让纪律变成结构性的，而非「建议性的」。
-
-It does **not** replace Hermes's existing dev skills. It **orchestrates** them as stage workers, so the discipline is structural, not advisory.
-
-## 安装 / Install
+## 快速上手 / Quick start
 
 ```bash
-git clone https://github.com/bobvane/hermes-code-agent.git
+# 1. 安装 (一次即可)
 mkdir -p ~/.hermes/skills
 cp -r hermes-code-agent ~/.hermes/skills/
+
+# 2. 在聊天中直接使用
+# "fix the divide-by-zero bug in calc.py"
+# "refactor the cache module and run pytest"
+# "implement LRU+TTL cache per benchmarks/README.md"
 ```
 
-**装完即用，零配置。** 安全规则与测试/lint 命令已内置，无需为任何项目复制配置文件。
+**不需要复制任何文件到项目**，Skill 自动探测 `pytest` / `npm test` / `go test` 等命令并执行。
 
-> **可选覆盖（非必须）**：若某仓库需要非标准测试命令或专属约定，可复制模板自行调整：
-> ```bash
-> cp ~/.hermes/skills/hermes-code-agent/templates/AGENTS.md ./AGENTS.md
-> ```
-> 这一步**不是必需的**——Skill 会自动探测命令并强制执行安全门禁。
-## 使用 / Use
+## 工作流 / The hard loop
 
-在任何 Hermes 对话里，直接描述任务即可：
-- 「用 FastAPI 搭个鉴权服务」
-- 「修 src/parser.py 里的 bug」
-- 「重构鉴权模块」
+```
+CLARIFY  →  PLAN  →  BUILD  →  VERIFY(pytest/lint)  →  LOOP ON RED  →  GATE(green)
+```
 
-智能体会自动跑硬循环：澄清 → 规划 → 实现 → 验证 → 红了就修 → 全绿才过关。
+- **探测命令后才提问**：CLARIFY 步骤会先自动找 `Makefile`/`pyproject.toml` 等，不确定时才问
+- **规划与修改分离**：PLAN 阶段只探查+决策，不写代码；BUILD 阶段最小改动
+- **红就回灌**：验证失败把**准确错误**回灌模型，最多 5 次 red→fix；5 次还红就停報阻塞
+- **绿才算完成**：只有所有校验通过才报 done
 
-The agent will run the hard loop automatically: clarify → plan → implement → verify → loop on red → green gate.
+詳見 `SKILL.md`。
 
-## 与主流工具对比 / How it compares
+## 三档模型實測 / Benchmark results
 
-| 工具 Tool | 开源 Open | 模型 Model | 本项目中的角色 Role here |
+同題對比 (DeepSeek V4 Flash via OmniRoute),三对象 (OpenCode / Aider / hermes-code-agent Skill):
+
+| 題 | OpenCode | Aider | Skill |
 |---|---|---|---|
-| OpenCode | MIT | 75+（模型无关） | **主要参考** — harness 架构 |
-| OpenAI Codex CLI | Apache-2.0 | OpenAI 优先 | 次要 — exec/审批/子代理模式 |
-| Claude Code | 闭源 | Claude | 仅借鉴循环形态（非代码参考） |
-| **Hermes Code Agent** | MIT | **任意（Hermes 默认）** | 你正在安装的这个 Skill |
+| A: 嵌套事务 KV 缓存 (7 裁判) | ✅ 7/7 | ✅ 7/7 | ✅ 7/7 |
+| B: TTLCache LRU+TTL (6 裁判) | ✅ 6/6 | ✅ 6/6 | ✅ 6/6 |
 
-## 设计红线（通用性）/ Design red lines
+**結論**：強模型下 Skill 與一流開源 agent 齊平；題 C(Async 调度器)雖然因 DSv4 流式波動 OpenCode/Aider 都失敗, Skill 靠 `stream:false` 穩定通過 —— **工程鲁棅性優勢**。
 
-1. 自洽的硬循环 —— 不依赖任何外部组件。
-2. 规划输入可选 —— 默认从一条原始指令就能跑。
-3. 不硬编码任何私有工作流命令（omh 等只是可选上游）。
-4. 不绑定固定模型 —— 用 Hermes 的默认模型。
+> ⚠️ 題 C 對比詳見 `benchmarks/README.md`。強調：Skill 價值由「模型档次 × 題目難度」交互決定；简单題/强模型時邊际為零；難題/弱模型時救命兔。
 
-## 链接 / Links
+## 項目結構 / Structure
 
-- 仓库 Repo：https://github.com/bobvane/hermes-code-agent
-- 路线图 Roadmap：见 `ROADMAP.md`
-- 实测报告 Benchmark：见 `benchmarks/README.md`
+```
+hermes-code-agent/
+├── SKILL.md                    # 主設計文檔 (中文/雙語)
+├── README.md                   # 這裡
+├── ROADMAP.md                  # 開發路線圖 + 歷史版本
+├── LICENSE                     # MIT
+├── templates/
+│   └── AGENTS.md               # 可選項目規則 (零配可不放)
+├── benchmarks/
+│   ├── README.md               # 測試框架+對比報告
+│   └── test_ttlcache.py        # LRU+TTL pytest 裁判
+├── references/
+│   ├── inspiration.md          # OpenCode+Codex 機制提煉
+│   ├── extra-distillation.md   # Aider/Cline/Gemini/Pi 機制
+│   ├── workflow.md             # 各語言 verify 命令
+│   ├── benchmark.md            # 弱模型驗證實驗
+│   └── parallel-implement-review.md
+└── scripts/
+    └── make_bugbench.py        # benchmark harness
+```
 
-## 许可证 / License
+## 對比六大開源 Agent / Reference
 
-MIT —— 见 `LICENSE`。
+| 機制 | OpenCode | Codex | Aider | Cline | Gemini CLI | Pi | 本 Skill |
+|---|---|---|---|---|---|---|---|
+| 硬驗證循環 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Plan/Exec 分離 | implicit | ModeKind | — | Plan/Act | — | — | ✅ |
+| 子Agent fan-out | ✅ | ✅ | — | — | — | ext | delegate_task |
+| 預算上限 | steps | Token/Rollout | — | — | — | — | ✅ |
+| Repo map | — | — | ✅ PageRank | — | — | — | ✅ |
+| 快照回滾 | /undo | — | — | shadow-git | — | — | ✅ |
+| 模型感知上下文 | compact | compact | map | — | 1M load | — | ✅ |
+
+## 開發路線 / Roadmap
+
+| 版本 | 里程 |
+|---|---|
+| v0.1.0 | 初始 skeleton: 硬循環 + 階段協作路由 |
+| v0.2.0 | 吸收 OpenCode/Codex 機制進 SKILL.md |
+| v0.5.0 | Codex 對等深度交叉驗證 |
+| v0.6.0 | 額外 4 agent 機制 (Aider/Cline/Gemini/Pi) |
+| v0.7.0 | benchmark 測試框架固化 |
+| v0.8.0 | 强模型实测 (LRA+TTL) |
+| v0.10.0 | README 中文主体 |
+| v0.11.0 | **零配設計**：內置安全+自动探测, AGENTS.md 可選 |
+| v0.11.1 | **当前**：文档口径统一修正 |
+| v1.0+ | 計劃: Hermes plugin/ACP-server 實現程序級硬門禁 |
+
+詳見 `ROADMAP.md`。
+
+## License
+
+MIT — see LICENSE.

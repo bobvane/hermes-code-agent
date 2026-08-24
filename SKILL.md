@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 0.11.1
+version: 1.0.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -12,7 +12,7 @@ metadata:
     title_zh: Hermes 代码助手（自纠错编程工作流）
 ---
 
-# Hermes Code Agent
+# Hermes Code Agent — 硬验证循环
 
 > **Hermes 代码助手（自纠错编程工作流）**
 > 把 Hermes 变成一个会自己纠错的编程智能体：用「先验证、后完成」的硬循环（实现→测试/校验→修复→全绿才算完成）包裹模型，让弱到中档模型也能稳定产出可靠代码。
@@ -21,13 +21,13 @@ Turn Hermes into a self-correcting coding agent. The model alone is a "weak code
 
 Cross-validated against two open-source agents read at equal depth: **OpenCode** (model-agnostic harness, LSP feedback, subagent fan-out, per-agent model) and **OpenAI Codex CLI** (ModeKind plan/exec split, Guardian fail-closed approval, Token/RolloutBudget cost ceiling). See `references/inspiration.md`.
 
-## What this skill is NOT
+## What this skill is NOT / 本技能不是什么
 
 - NOT a rewrite of TDD / debugging / code-review skills. It **orchestrates** them as stage workers. Single source of truth stays with those skills.
 - NOT bound to any planner (omh / AGENTS.md / company flow). Those are **optional upstreams**. A raw instruction works fine.
 - NOT bound to any framework it shouldn't be. Runs on plain Hermes, any model, any repo.
 
-## The hard loop (the only non-negotiable)
+## The hard loop (the only non-negotiable) / 唯一强制循环
 
 Every implementation task goes through this. The agent must NOT report "done" until the gate is green.
 
@@ -52,7 +52,6 @@ Every implementation task goes through this. The agent must NOT report "done" un
 
 ## Zero-config by default（零配置，无需 AGENTS.md）
 
-> 本 Skill 安装一次即可使用，不需要为任何项目复制文件。
 > Install once, zero-config. No per-project file copying required.
 
 **Universal safety rules（内置硬性安全规则，无需外部文件）** — always enforced, with or without an AGENTS.md:
@@ -71,7 +70,7 @@ Every implementation task goes through this. The agent must NOT report "done" un
 
 **AGENTS.md is now fully optional（AGENTS.md 仅为可选覆盖）** — `templates/AGENTS.md` is NOT required. The skill already enforces the above by itself. Use AGENTS.md ONLY to *override* auto-detected defaults or add project-specific conventions (naming, layout, out-of-scope). If present at repo root, the skill consumes it as an override; if absent, it runs identically.
 
-## Stage workers (call these, don't duplicate them)
+## Stage workers (call these, don't duplicate them) / 阶段性协作工具
 
 When the step needs it, load the matching skill instead of re-inventing instructions:
 
@@ -87,10 +86,11 @@ If the skill is not installed, fall back to the behavior described inline — do
 
 ## Advanced patterns (distilled from 6 open agents, OpenCode primary)
 
-OpenCode leads (harness architecture). Codex secondary (ModeKind/Guardian/Budget). This
-round adds Aider, Cline, Gemini CLI, Pi — see `references/extra-distillation.md`. Defaults, not options.
+OpenCode leads (harness architecture). Codex secondary (ModeKind/Guardian/Budget). This round adds Aider, Cline, Gemini CLI, Pi — see `references/extra-distillation.md`. Defaults, not options.
 
 1. **Delegate by default for non-trivial tasks.** Do not implement + review in the same head. Use `delegate_task`: one builder agent (isolated context) + one reviewer agent, run in parallel, then reconcile. Use the reusable prompts in `references/parallel-implement-review.md`. Both OpenCode (Task tool) and Codex (multi_agents_v2) converge on this.
+
+**Pitfall (stream vs non-stream in non-interactive mode):** when invoking coding agents in one-shot/non-interactive mode (e.g. `aider -m`, `opencode run`), **default streaming output is unstable on long/complex generations** — Aider emits a 0-byte file after a stream truncation; OpenCode crashes with an OmniRoute `Unexpected server error` on multi-turn async code. The fix is to force **non-streaming completion** (`stream=false` at the API layer, or `--no-stream` where the CLI supports it) for these invocations. See `references/non-interactive-streaming-pitfall.md` for the exact reproduction (Async AI Provider Scheduler task C failed 5/5 streamed, 5/5 passed with stream:false). Interactive/TUI use keeps streaming (it is more responsive); only the headless/non-interactive path switches to non-streaming.
 2. **Per-step model hint (where setup allows).** If the user's Hermes config has more than one model, prefer a stronger model for PLAN/architecture steps and a cheaper one for BUILD/execute steps. OpenCode does this via a per-agent `model` field; we approximate via profile/provider swap at step boundaries.
 3. **Command-segment approval + low-risk self-review.** Split shell commands at operators (`|`, `&&`, `||`, `;`, subshells) and evaluate EACH segment. Destructive segments (`rm`, `git reset --hard`, `drop`, force flags) ALWAYS need explicit user confirm — never auto-approve. For *non-destructive, repeated* approvals in `auto-edit` mode, apply a quick self-review (re-state the action + risk; deny if ambiguous) instead of pinging the user every time — borrowed from Codex's Guardian (fail-closed) pattern; destructive ops never go to self-review.
 4. **Bound the loop + budget.** Step cap (3-5), red→fix cap (5/step), and a soft tool-call cap (~40). On exceed → stop, report blocker. OpenCode encodes this via a `steps` field; Codex via Token/RolloutBudget. We enforce both.
@@ -100,11 +100,11 @@ round adds Aider, Cline, Gemini CLI, Pi — see `references/extra-distillation.m
 
 ## Approval modes (borrowed from Codex CLI)
 
-Pick by task risk. Default to `auto-edit` for local repos you trust.
-
+Pick by task risk.
 - **suggest** — propose changes, ask before editing. Use for unfamiliar/prod repos.
 - **auto-edit** — edit + run read-only checks freely; stop only on destructive ops (push, force, delete). Low-risk repeated approvals may use self-review (Advanced pattern 3).
 - **full-auto** — unattended; only for sandboxed/throwaway work. Never default to this.
+- Default is `auto-edit` for local repos you trust.
 
 Destructive commands (git push, rm -rf, drop db, force flag) ALWAYS require an explicit user confirm, regardless of mode.
 
@@ -119,10 +119,10 @@ If the conversation already contains a structured plan (from omh, a written AGEN
 - If context is large, summarize completed steps into a short status line and drop old tool output.
 - Respect `.gitignore` and project rule files (AGENTS.md / .hermes.md / CLAUDE.md) when present.
 
-## Quick start for the user
+## Quick start for the user / 快速开始
 
 1. Drop `hermes-code-agent/` into `~/.hermes/skills/` (or your Hermes skills dir). **That's it — zero config.**
 2. In chat: "build X", "fix bug in Y", "refactor Z" — the loop runs automatically. Safety rules and test/lint commands are built-in.
 3. (Optional) If you want project-specific overrides (e.g. a non-standard test command or extra conventions), copy `templates/AGENTS.md` into that repo and edit it. **This step is NOT required** — the skill auto-detects commands and enforces safety on its own.
 
-See `ROADMAP.md` for the project's intent and the `references/` folder for command templates.
+See `ROADMAP.md` for the project's intent and the `references/` folder for source analysis.
