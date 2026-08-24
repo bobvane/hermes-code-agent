@@ -69,9 +69,11 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 - **v0.11.0** — **产品设计修正（零配置）**：根据用户反馈，AGENTS.md 不应是"每个项目复制一次"的必需文件。Skill 现已**内置安全规则 + 自动探测测试/lint/构建命令**，安装一次即可无感使用；AGENTS.md 降级为纯可选覆盖（仅用于覆盖自动探测默认值或加项目专属约定）。templates/AGENTS.md 保留作可选模板，但 Quick start 不再要求复制。CLARIFY 步骤加入"先探测命令再问"。
 
+- **v0.11.1** — 文档口径同步修正：补改 README.md 安装段（删除"必须复制 AGENTS.md"引导，改为"零配置、可选覆盖"），使所有文档与零配置设计一致。SKILL.md 版本号对齐 0.11.1。
+
 ## 当前版本 / Current version
 
-**v0.11.0**（SKILL.md frontmatter 待同步）。项目说明文件均以中文为主体。
+**v0.11.1**（SKILL.md frontmatter 已同步）。项目说明文件均以中文为主体。零配置设计已落地：安装一次即用，无需为任何项目复制文件。
 
 ## 下一步（建议 / Next steps, optional）
 

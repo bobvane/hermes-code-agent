@@ -24,11 +24,13 @@ mkdir -p ~/.hermes/skills
 cp -r hermes-code-agent ~/.hermes/skills/
 ```
 
-可选：把项目规则模板复制进你的仓库：
-```bash
-cp ~/.hermes/skills/hermes-code-agent/templates/AGENTS.md ./AGENTS.md
-```
+**装完即用，零配置。** 安全规则与测试/lint 命令已内置，无需为任何项目复制配置文件。
 
+> **可选覆盖（非必须）**：若某仓库需要非标准测试命令或专属约定，可复制模板自行调整：
+> ```bash
+> cp ~/.hermes/skills/hermes-code-agent/templates/AGENTS.md ./AGENTS.md
+> ```
+> 这一步**不是必需的**——Skill 会自动探测命令并强制执行安全门禁。
 ## 使用 / Use
 
 在任何 Hermes 对话里，直接描述任务即可：
