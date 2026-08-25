@@ -110,6 +110,7 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 ## 當前版本 / Current version
 
+**v1.8.2** (2026-08-25): 对标收敛 — 移除三个六家参照均无的原创机制：①guard 反作弊子系统（judge sha256 封存 + exit 3）②exit-code 硬门禁降级为 Aider 式提示词重试纪律（≤3 次）③state 断点恢复口径（state 保留为 doomcheck/budget 内部计数器）。政策依据：Bob 定"六家没有的不做、有的尽量加"。自测 47/47。
 **v1.8.1** (2026-08-25): 总体测试驱动修复 — `run()` 加 per-command 超时 + 进程组 kill（start_new_session + killpg），防死锁 impl 把 pytest runner 挂死时 verify 无法返回；超时降 600s→180s，rc=124 进入红轮/语义 doom 流程。自测 52/52。
 **v1.8.0 总体测试**: 四模型 A/B 对比基准 32 轮，详见 benchmarks/v180-benchmark-report.md。
 **v1.8.0** (2026-08-25): 四仓共识第二批(auto-commit + patch 三级降级 + repomap + overflow 压缩). 自测 52/52.
