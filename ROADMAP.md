@@ -91,10 +91,15 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 - **v1.5.1 — detect 优先探测项目 venv python (2026-08-25)**:
   - 验证轮反馈: detect_commands 先探测 `.venv/bin/python`, 消除每轮 verify 的 FileNotFoundError 噪声 (~550 tok/轮).
   - 补测: DeepSeek v4 Flash 中档轨 B×3 — 首过 9.0/11 (11,5,11), b2 撞 5 轮上限未收敛(commit 路径 doom-loop) → 记录为能力天花板并反哺: doomcheck 对"同测试集语义级重复红"缺检测, 列入 v1.6 候选.
+- **v1.6.0 — doomcheck 语义级检测 (2026-08-25)**:
+  - **实证驱动**: v1.5.1 补测 b2 的 doom-loop——模型对同一 commit 缺陷连续 5 轮盲修, 现有 action-tag doomcheck 检测不到(每轮编辑 tag 都不同).
+  - **failure fingerprint**: 每次 verify RED 提取失败测试 id 集合的 sha1 指纹写入 state(`fail_fp`, cap=阈值); **同一失败集连续 3 轮 → exit 2 熔断**, 明示"你在盲修循环, 停止 patch, 回滚快照或换策略".
+  - **语义安全**: 集合序无关/计数无关; 失败集一旦变化(有测试被修好)立即重置——真修复不会误触; collection error 等无 FAILED 行场景返回 None 不参与判定.
+  - **自测**: tests/test_hca_gate.py 33 用例全绿(新增语义熔断触发+恢复重置用例); bench 目录实战验证: 同坏实现 3 轮 → exit 2 触发, 改动失败集后回到普通 RED.
 
 ## 當前版本 / Current version
 
-**v1.5.1** (2026-08-25): detect venv 优先探测; v1.5.0 三特性(事务restore/compact/预算软提醒)经 B×3 实战验证; v4 Flash 中档轨补测完成. SKILL.md version: 1.5.1.
+**v1.6.0** (2026-08-25): doomcheck 语义级检测(同失败集×3 → exit 2). 自测 33/33.
 
 ## 後續升級目標 / Post-v1.5.1 goals (updated 2026-08-25)
 

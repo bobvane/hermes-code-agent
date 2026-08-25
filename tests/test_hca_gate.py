@@ -226,5 +226,41 @@ check("second compact is a no-op",
                              or "compacted" in r.stdout), r.stdout)
 shutil.rmtree(d)
 
+# --- semantic doom: same failure set 3x in a row → exit 2 ---
+d = fresh_git_repo()
+(d / "pyproject.toml").write_text("[project]\nname='t'\n")
+(d / "tests").mkdir()
+(d / "tests" / "test_a.py").write_text(
+    "def test_one():\n    assert 1 == 2\n"
+    "def test_two():\n    assert 2 == 3\n")
+venv_py = d / ".venv" / "bin"
+venv_py.mkdir(parents=True)
+venv_py.joinpath("python").write_text(
+    "#!/bin/sh\nexec " + sys.executable + " \"$@\"\n")
+venv_py.joinpath("python").chmod(0o755)
+codes = []
+for _ in range(3):
+    r = sh(["verify"], d)
+    codes.append(r.returncode)
+check("semantic doom: red, red, then exit 2",
+      codes[:2] == [1, 1] and codes[2] == 2, str(codes))
+check("semantic doom message shown", "DOOM" in r.stdout
+      and "Same failure set" in r.stdout, r.stdout[-200:])
+st_file = d / ".hca_state.json"
+if st_file.exists():
+    st = json.loads(st_file.read_text())
+    fps = st.get("fail_fp") or []
+    check("fail_fp history kept (capped at threshold)",
+          len(fps) <= 3 and len(set(fps)) == 1, str(fps))
+
+# --- recovery: a different failure set resets the streak ---
+# make only test_two fail now (fix test_one): fingerprint changes → not doom
+(d / "tests" / "test_a.py").write_text(
+    "def test_one():\n    assert 1 == 1\n"
+    "def test_two():\n    assert 2 == 3\n")
+r = sh(["verify"], d)
+check("changed failure set → back to plain RED (not doom)", r.returncode == 1,
+      f"rc={r.returncode}")
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

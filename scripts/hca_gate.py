@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hca_gate.py — hermes-code-agent deterministic gate CLI (v1.2.1)
+"""hca_gate.py — hermes-code-agent deterministic gate CLI (v1.6.0)
 
 The "punch clock" of the hard verify loop. Rules that a model might forget
 become commands that always run. Exit-code semantics are the contract:
@@ -325,6 +325,17 @@ NOISE_PATTERNS = re.compile(
     r"^\.|^\s*$|^Warning: |^Deprecated", re.MULTILINE)
 
 
+def failure_fingerprint(pytest_output):
+    """Hash the SET of failing test ids from pytest output. Order- and
+    count-insensitive; returns None when no test ids are parseable (e.g.
+    collection errors), so non-test failures never trigger semantic doom."""
+    ids = sorted({m.split()[0] for m in
+                  re.findall(r"FAILED\s+(\S+)", pytest_output)})
+    if not ids:
+        return None
+    return hashlib.sha1(" ".join(ids).encode()).hexdigest()[:12]
+
+
 def trim_output(text, max_chars):
     """Pi-style double-limit digest: keep failure-relevant lines, cap by
     line count (200) AND bytes (max_chars). Never returns a half line."""
@@ -438,8 +449,33 @@ def cmd_verify(args):
         shown = "\n".join(d for _, d in digests)
         tv.append(estimate_tokens(shown))
         st["tokens_verify"] = tv[-20:]  # compaction: keep telemetry lean
+
+        # --- semantic doom: same failure SET repeatedly → hard stop ---
+        # (found in v1.5.1 bench: model patched the same commit-path bug
+        #  5 rounds straight; action-tag doomcheck can't see this because
+        #  each edit is a different tag. Fingerprint the failing tests.)
+        fp = failure_fingerprint(last_out)
+        if fp:
+            hist = [f for f in (st.get("fail_fp") or [])
+                    if isinstance(f, str)][-DOOM_THRESHOLD:]
+            hist.append(fp)
+            st["fail_fp"] = hist[-DOOM_THRESHOLD:]
+            semantic_doom = (len(st["fail_fp"]) == DOOM_THRESHOLD
+                             and len(set(st["fail_fp"])) == 1)
+        else:
+            semantic_doom = False
         st["git_head"] = current_head()
         save_state(st)
+        if semantic_doom:
+            print("[HCA-GATE-DOOM] Same failure set repeated "
+                  f"{DOOM_THRESHOLD}x in a row — you are in a blind-patch "
+                  "loop. The failing tests did not change across your last "
+                  f"{DOOM_THRESHOLD} fixes.")
+            print("Required: STOP patching. Either revert to the last "
+                  "snapshot (hca_gate.py snapshot shows ids) and take a "
+                  "DIFFERENT approach, or report this as a blocker with "
+                  "your diagnosis of why the fix never lands.")
+            sys.exit(2)
         n = st["redfix"][key]
         extra = ""
         if n >= 5:
