@@ -217,14 +217,31 @@ NOISE_PATTERNS = re.compile(
 
 
 def trim_output(text, max_chars):
-    """Keep failure-relevant lines only; cap length."""
+    """Pi-style double-limit digest: keep failure-relevant lines, cap by
+    line count (200) AND bytes (max_chars). Never returns a half line."""
+    MAX_LINES = 200
     lines = [ln for ln in text.splitlines()
              if re.search(r"(FAILED|ERROR|Error|error|assert|Exception|✗|×)",
                           ln)]
-    trimmed = "\n".join(lines[:40])
-    if len(trimmed) > max_chars:
-        trimmed = trimmed[:max_chars] + "\n...[truncated]"
+    out_lines, used = [], 0
+    for ln in lines[:MAX_LINES]:
+        if used + len(ln) + 1 > max_chars:
+            out_lines.append("...[truncated %d more error lines]"
+                             % (len(lines) - len(out_lines)))
+            break
+        out_lines.append(ln)
+        used += len(ln) + 1
+    trimmed = "\n".join(out_lines)
+    if not trimmed and text.strip():
+        # no failure-pattern lines: fall back to tail so red is never silent
+        tail = text.strip().splitlines()[-10:]
+        trimmed = "\n".join(tail)[-max_chars:]
     return trimmed
+
+
+def estimate_tokens(text):
+    """Rough token proxy (~chars/3.5 for mixed CJK/ASCII). For cost telemetry."""
+    return max(1, round(len(text) / 3.5))
 
 
 def venv_python_hint():
@@ -249,9 +266,11 @@ def cmd_verify(args):
         fail("no test command detected — ask the user; do NOT fake green")
     failures = []
     unavailable = []
+    last_out = ""
     for c in cmds:
         print(f"$ {c}")
         rc, out = run(c.split(), timeout=600)
+        last_out = out
         print(out[-1500:] if rc != 0 else
               ("PASS" if rc == 0 else out[-800:]))
         if rc == 127 or "No module named" in out:
@@ -290,13 +309,19 @@ def cmd_verify(args):
                  "do NOT fake green")
     if failures:
         for c, trimmed in failures:
-            print(f"\n[VERIFY-RED] `{c}` failed. Error digest:\n{trimmed}")
-        # record red cycle in state
+            print(f"\n[VERIFY-RED] `{c}` failed. Error digest "
+                  f"(~{estimate_tokens(trimmed)} tok):\n{trimmed}")
+        # record red cycle in state + cost telemetry
         st = load_state()
         if state_stale(st):
             st = load_state() | {"git_head": current_head()}
         key = "verify"
-        st["redfix"][key] = st.get("redfix", {}).get(key, 0) + 1
+        rf = st.get("redfix") or {}
+        rf[key] = rf.get(key, 0) + 1
+        st["redfix"] = rf
+        tv = [t for t in (st.get("tokens_verify") or []) if isinstance(t, int)]
+        tv.append(estimate_tokens(last_out))
+        st["tokens_verify"] = tv[-20:]  # compaction: keep telemetry lean
         st["git_head"] = current_head()
         save_state(st)
         n = st["redfix"][key]
