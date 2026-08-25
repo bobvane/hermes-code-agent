@@ -56,6 +56,191 @@ def fail(msg):
     sys.exit(1)
 
 
+# ------------------------------------------- patch apply w/ 3-tier fallback
+
+def _unified_diff_blocks(diff_text):
+    """Split a multi-file unified diff into (path, hunks) blocks."""
+    import re as _re
+    blocks, cur = [], None
+    for line in diff_text.splitlines():
+        m = _re.match(r"\+\+\+ (?:b/)?(\S+)", line)
+        if m and not line.startswith("---"):
+            cur = {"path": m.group(1), "lines": []}
+            blocks.append(cur)
+            continue
+        if cur is not None:
+            if line.startswith(("--- ", "diff --git")) \
+                    and not line.startswith("--- \t"):
+                cur = None
+                continue
+            cur["lines"].append(line)
+    return [b for b in blocks if b["lines"]]
+
+
+def cmd_patch(args):
+    """Codex-style patch application with three-tier matching fallback:
+    tier 1: `git apply` (exact context);
+    tier 2: per-hunk apply with reduced context (`--unidiff-zero` + ignore
+            whitespace) — survives small drift around the edit;
+    tier 3: anchor replace — find the removed lines' core content with all
+            whitespace stripped; if unique, splice the replacement.
+    Never partially applies a file silently: reports per-block outcome."""
+    diff_text = Path(args.patch_file).read_text(encoding="utf-8") \
+        if args.patch_file else sys.stdin.read()
+    blocks = _unified_diff_blocks(diff_text)
+    if not blocks:
+        fail("no parseable diff blocks")
+    results = []
+    for b in blocks:
+        block_diff = ("--- a/" + b["path"] + "\n+++ b/" + b["path"]
+                      + "\n" + "\n".join(b["lines"]) + "\n")
+        p = Path(b["path"])
+        # tier 1: exact git apply of this block
+        proc = subprocess.run(["git", "apply", "--whitespace=nowarn", "-"],
+                              input=block_diff, capture_output=True,
+                              text=True, timeout=60)
+        if proc.returncode == 0:
+            results.append((b["path"], "exact"))
+            continue
+        # tier 2: relaxed — ignore whitespace changes, allow zero context
+        proc = subprocess.run(
+            ["git", "apply", "--ignore-whitespace", "--unidiff-zero",
+             "--whitespace=nowarn", "-"],
+            input=block_diff, capture_output=True, text=True, timeout=60)
+        if proc.returncode == 0:
+            results.append((b["path"], "fuzzy(ws)"))
+            continue
+        # tier 3: anchor — strip ws from removed lines, require uniqueness
+        old_lines = [ln[1:] for ln in b["lines"]
+                     if ln.startswith("-") and not ln.startswith("---")]
+        new_lines = [ln[1:] for ln in b["lines"]
+                     if ln.startswith("+") and not ln.startswith("+++")]
+        key = "".join(old_lines).strip()
+        if not p.exists() or not key:
+            results.append((b["path"], "FAILED(all tiers)"))
+            continue
+        text = p.read_text(encoding="utf-8")
+        knorm = "".join(key.split())
+        if _wsfree_count(text, key) != 1:
+            results.append((b["path"], "FAILED(anchor not unique/found)"))
+            continue
+        span = _wsfree_span(text, key)   # (first_char_idx, last_char_idx)
+        if span is None:
+            results.append((b["path"], "FAILED(anchor walk)"))
+            continue
+        first, last = span
+        new_text = text[:first] + "\n".join(new_lines) + text[last + 1:]
+        p.write_text(new_text, encoding="utf-8")
+        results.append((b["path"], "anchor"))
+    for path, how in results:
+        print(f"  ok  {path} [{how}]")
+    bad = [r for r in results if r[1].startswith("FAILED")]
+    if bad:
+        fail(f"{len(bad)}/{len(results)} patch block(s) failed: "
+             + "; ".join(f"{p}: {h}" for p, h in bad))
+    ok(f"patch applied ({len(results)} block(s))")
+
+
+def _wsfree_count(text, key):
+    """Occurrences of `key` in `text` ignoring all whitespace on both sides."""
+    knorm = "".join(key.split())
+    if not knorm:
+        return 0
+    return sum(1 for _ in _wsfree_iter(text, knorm))
+
+
+def _wsfree_iter(text, knorm):
+    """Yield (start, end) spans where knorm matches ignoring whitespace."""
+    i, j, n, m = 0, 0, len(text), len(knorm)
+    start = None
+    while i < n:
+        ch = text[i]
+        if ch.isspace():
+            i += 1
+            continue
+        if j == 0:
+            start = i
+        if ch == knorm[j]:
+            j += 1
+            i += 1
+            if j == m:
+                yield (start, i - 1)
+                j, start = 0, None
+        else:
+            # mismatch: restart scan just after the candidate start char
+            i = start + 1
+            j, start = 0, None
+
+
+def _wsfree_span(text, key):
+    knorm = "".join(key.split())
+    for span in _wsfree_iter(text, knorm):
+        return span
+    return None
+
+
+# ----------------------------------------------------------------- repo map
+
+REPO_MAP_MAX_FILES = 400
+REPO_MAP_TOP = 40          # files listed, ranked by symbol hits
+REPO_MAP_SYMBOLS_PER_FILE = 8
+
+PY_DEF = re.compile(
+    r"^(?:\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)"
+    r"|^(?:class)\s+([A-Za-z_]\w*)")
+
+
+def cmd_repomap(_args):
+    """Aider-style lightweight repo map: rank source files by definition
+    count (grep-based symbol sort), list top files with their defs.
+    Pure stdlib walk — no tree-sitter, no networkx. Deterministic order."""
+    import collections
+    exts = {".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java",
+            ".sh", ".rb", ".php", ".c", ".h", ".cpp", ".hpp"}
+    skip_dirs = {".git", ".venv", "venv", "node_modules", "__pycache__",
+                 "dist", "build", ".pytest_cache", ".mypy_cache"}
+    pat = re.compile(
+        r"^\s*(?:(?:async\s+)?def|class|func|fn|function|export\s+function"
+        r"|sub)\s+([A-Za-z_]\w*)")
+    counts = {}
+    defs = {}
+    nfiles = 0
+    for root, dirs, files in os.walk("."):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for f in files:
+            if os.path.splitext(f)[1] not in exts:
+                continue
+            path = os.path.relpath(os.path.join(root, f))
+            nfiles += 1
+            if nfiles > REPO_MAP_MAX_FILES:
+                continue
+            syms = []
+            try:
+                with open(path, encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        m = pat.match(line)
+                        if m:
+                            syms.append(m.group(1))
+                            if len(syms) >= REPO_MAP_SYMBOLS_PER_FILE * 4:
+                                break
+            except OSError:
+                continue
+            if syms:
+                counts[path] = len(syms)
+                # deterministic: keep first-seen then sort alphabetically
+                defs[path] = sorted(set(syms))[:REPO_MAP_SYMBOLS_PER_FILE]
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    if not ranked:
+        ok("repo map: no indexed source files")
+        return
+    print(f"[HCA-GATE] repo map — {len(ranked)} files with symbols "
+          f"(scanned {nfiles}), top {min(REPO_MAP_TOP, len(ranked))}:")
+    for path, cnt in ranked[:REPO_MAP_TOP]:
+        print(f"  {path} ({cnt})  {', '.join(defs[path])}")
+    print("[HCA-GATE] use: read the most relevant file directly; "
+          "do NOT dump the whole map into context")
+
+
 def hard_stop(msg):
     """Exit-2 circuit breaker output (budget/doom family)."""
     print(f"[HCA-GATE-BUDGET] {msg}")
@@ -391,6 +576,19 @@ def trim_output(text, max_chars):
         # no failure-pattern lines: fall back to tail so red is never silent
         tail = text.strip().splitlines()[-10:]
         trimmed = "\n".join(tail)[-max_chars:]
+        if len(trimmed) >= max_chars:
+            trimmed = trimmed[:max_chars - len("[overflow compressed]")] \
+                + "[overflow compressed]"
+    # ⑦ overflow forced deterministic compression: even after filtering,
+    # a pathological output (e.g. one 10k-char line) must never exceed the
+    # hard cap. Deterministic middle-cut, no LLM, no randomness.
+    if len(trimmed) > max_chars:
+        marker = "...[overflow compressed]..."
+        keep = max_chars - len(marker) - 2
+        head = keep * 2 // 3
+        tailn = max(keep - head, 0)
+        trimmed = trimmed[:head] + "\n" + marker + "\n" + trimmed[-tailn:] \
+            if tailn else trimmed[:head] + "\n" + marker
     return trimmed
 
 
@@ -522,7 +720,41 @@ def cmd_verify(args):
     st = load_state()
     st["git_head"] = current_head()
     save_state(st)
-    ok("full verify passed")
+    print("[HCA-GATE-GREEN] full verify passed")
+    autocommit(st)
+    sys.exit(0)
+
+
+# ------------------------------------------------------- auto-commit (Aider)
+
+def autocommit(st):
+    """Aider-style auto-commit: after a green verify, land every working-tree
+    change as a checkpoint commit so each green round is durable and
+    revertible. Best-effort: no git repo / nothing to commit / git failure
+    are all silent no-ops — never blocks the loop."""
+    r = run(["git", "rev-parse", "--is-inside-work-tree"])
+    if r[0] != 0 or r[1].strip() != "true":
+        return
+    dirty = (run(["git", "diff", "--quiet", "--",
+                  ":(exclude).hca_state.json"])[0] != 0
+             or run(["git", "ls-files", "--others", "--exclude-standard",
+                     "--", ":(exclude).hca_state.json"])[1].strip() != "")
+    if not dirty:
+        return  # clean tree — nothing to land
+    add = run(["git", "add", "-A"])
+    if add[0] != 0:
+        return
+    run(["git", "reset", "-q", "--", ".hca_state.json"])
+    if run(["git", "diff", "--cached", "--quiet"])[0] == 0:
+        return  # only the state file changed — nothing to land
+    n_red = (st.get("redfix") or {}).get("verify", 0)
+    msg = f"hca: green checkpoint (verify pass, red-cycles={n_red})"
+    c = run(["git", "commit", "-qm", msg])
+    if c[0] == 0:
+        st["autocommits"] = (st.get("autocommits") or 0) + 1
+        save_state(st)
+        print(f"[HCA-GATE] auto-committed checkpoint "
+              f"#{st['autocommits']}: {msg}")
 
 
 # -------------------------------------------------------------------- state
@@ -706,6 +938,10 @@ def main():
     c = sub.add_parser("compact", help="deterministic state compaction")
 
     q = sub.add_parser("quickcheck", help="fast per-file syntax gate")
+    pp = sub.add_parser("patch", help="apply unified diff (3-tier fallback)")
+    pp.add_argument("patch_file", nargs="?", default=None,
+                    help="diff file (default: stdin)")
+    sub.add_parser("repomap", help="lightweight symbol-ranked repo map")
     q.add_argument("files", nargs="*", help="files to check (default: scan)")
 
     v = sub.add_parser("verify", help="run full test suite (hard gate)")
@@ -727,7 +963,8 @@ def main():
              "restore": cmd_restore, "compact": cmd_compact,
              "quickcheck": cmd_quickcheck, "verify": cmd_verify,
              "state": cmd_state, "plancheck": cmd_plancheck,
-             "doomcheck": cmd_doomcheck, "guard": cmd_guard}
+             "doomcheck": cmd_doomcheck, "guard": cmd_guard,
+             "patch": cmd_patch, "repomap": cmd_repomap}
     table[args.cmd](args)
 
 

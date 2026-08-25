@@ -99,11 +99,18 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 - **v1.7.0 — 预算超支硬熔断 + 换模型建议 (2026-08-25)**:
   - **实证驱动**: v1.5.1 补测 b2 盲修 5 轮烧掉 ~23.6k token——旧机制只有软提醒, 烧穿预算也不会强制停.
   - **双阈值硬停**: verify digest 累计 ≥15000 tok 或红轮 ≥5 → exit 2 (与 doom 同级), 输出超支原因.
-  - **升级建议(Bob 提出)**: 硬停时向用户明示"当前模型反复无法收敛, 建议换更强模型从最近快照重新开始"——护栏不止于拦截, 还给出路.
+  - **升级建议**: 硬停时向用户明示"当前模型反复无法收敛, 建议换更强模型从最近快照重新开始"——护栏不止于拦截, 还给出路.
+- **v1.7.1 — 熔断提示精简 (2026-08-25)**: 换模型建议压缩为中英双行红色(ANSI 1;31)输出: "此模型不胜任此编程任务，建议更换更强模型。" / "This model is unfit for this coding task — switch to a stronger model."
+- **v1.8.0 — 四仓共识第二批落地 (2026-08-25)**:
+  - **⑥ auto-commit (Aider 式)**: verify 绿后自动落盘 checkpoint commit (`hca: green checkpoint`), 排除 .hca_state.json, 干树/非 git 目录静默跳过——每轮成果可回溯可 revert.
+  - **⑤ patch 三级降级 (Codex 式)**: 新 `patch` 子命令按块应用 unified diff: tier1 `git apply` 精确 → tier2 `--ignore-whitespace --unidiff-zero` 容忍空白漂移 → tier3 锚点替换(去空白匹配且全文唯一才动手); 任一块三级全败 → exit 1 RED, 不静默半应用.
+  - **④ repomap 轻量仓库图 (Aider 思路, stdlib 实现)**: 新 `repomap` 子命令 grep 式符号统计(def/class/func/fn...), 按符号数排序取 top40, 跳过 node_modules/.venv 等; 不引 tree-sitter/networkx.
+  - **⑦ overflow 强制确定性压缩**: trim_output 兜底再压一道——即使单行 50k 字符的病态输出也保证 ≤ max_chars, 中间截断带 `[overflow compressed]` 标记, 无 LLM 无随机.
+  - **自测**: tests/test_hca_gate.py 52 用例全绿(四特性各 3-5 用例).
 
 ## 當前版本 / Current version
 
-**v1.7.0** (2026-08-25): 预算超支硬熔断(token≥15k 或红轮≥5 → exit 2) + 升级换模型建议. 自测 36/36.
+**v1.8.0** (2026-08-25): 四仓共识第二批(auto-commit + patch 三级降级 + repomap + overflow 压缩). 自测 52/52.
 
 ## 後續升級目標 / Post-v1.5.1 goals (updated 2026-08-25)
 

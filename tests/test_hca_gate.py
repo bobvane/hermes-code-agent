@@ -2,6 +2,7 @@
 """Self-test for hca_gate.py — run: python tests/test_hca_gate.py"""
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -287,6 +288,120 @@ check("escalation hint is bilingual + red",
       "此模型不胜任此编程任务" in r.stdout and "\033[1;31m" in r.stdout,
       repr(r.stdout[-200:]))
 shutil.rmtree(d)
+
+# --- ⑥ auto-commit: green verify lands a checkpoint commit ---
+d = fresh_git_repo()
+(d / "pyproject.toml").write_text("[project]\nname='t'\n")
+(d / "tests").mkdir()
+(d / "tests" / "test_ok.py").write_text("def test_ok():\n    assert True\n")
+venv_py = d / ".venv" / "bin"
+venv_py.mkdir(parents=True)
+venv_py.joinpath("python").write_text(
+    "#!/bin/sh\nexec " + sys.executable + " \"$@\"\n")
+venv_py.joinpath("python").chmod(0o755)
+subprocess.run(["git", "add", "-A"], cwd=d)
+subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                "commit", "-qm", "base"], cwd=d)
+(d / "mod.py").write_text("x = 1\n")   # dirty tree
+r = sh(["verify"], d)
+check("auto-commit: green verify lands checkpoint",
+      r.returncode == 0 and "auto-committed checkpoint #1" in r.stdout,
+      r.stdout[-200:])
+log = subprocess.run(["git", "log", "--oneline", "-2"], cwd=d,
+                     capture_output=True, text=True).stdout
+check("auto-commit message in log", "green checkpoint" in log, log)
+r = sh(["verify"], d)   # clean tree now
+n_commits = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=d,
+                           capture_output=True, text=True).stdout.strip()
+check("auto-commit skips clean tree",
+      r.returncode == 0 and n_commits == "3", f"{n_commits} commits")
+shutil.rmtree(d)
+
+# --- ⑤ patch: three-tier fallback ---
+d = fresh_git_repo()
+(d / "app.py").write_text(
+    "def alpha():\n"
+    "    return   1      \n"
+    "\n"
+    "def beta():\n"
+    "    return 2\n")
+subprocess.run(["git", "add", "-A"], cwd=d)
+subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                "commit", "-qm", "init"], cwd=d)
+pf = d / "p.diff"
+# tier-1 exact
+pf.write_text("--- a/app.py\n+++ b/app.py\n"
+              "@@ -4,2 +4,2 @@\n"
+              " def beta():\n"
+              "-    return 2\n"
+              "+    return 22\n")
+r = sh(["patch", "p.diff"], d)
+check("patch tier1 exact apply",
+      r.returncode == 0 and "[exact]" in r.stdout, r.stdout)
+check("tier1 content landed", "return 22" in (d / "app.py").read_text())
+subprocess.run(["git", "checkout", "--", "app.py"], cwd=d)
+# tier-2 whitespace drift
+pf.write_text("--- a/app.py\n+++ b/app.py\n"
+              "@@ -2 +2 @@\n"
+              "-    return   1      \n"
+              "+    return 11\n")
+r = sh(["patch", "p.diff"], d)
+check("patch tier2 fuzzy apply",
+      r.returncode == 0 and ("[fuzzy" in r.stdout or "[exact]" in r.stdout),
+      r.stdout)
+subprocess.run(["git", "checkout", "--", "app.py"], cwd=d)
+# tier-3 anchor (wrong context lines, unique removed core)
+pf.write_text("--- a/app.py\n+++ b/app.py\n"
+              "@@ -10,3 +10,3 @@\n"
+              " WRONG CONTEXT LINE\n"
+              "-    return 2\n"
+              "+    return 222\n"
+              " ANOTHER WRONG LINE\n")
+r = sh(["patch", "p.diff"], d)
+check("patch tier3 anchor apply",
+      r.returncode == 0 and "[anchor]" in r.stdout, r.stdout)
+check("tier3 content landed", "return 222" in (d / "app.py").read_text())
+# all tiers fail
+pf.write_text("--- a/app.py\n+++ b/app.py\n"
+              "@@ -1,2 +1,2 @@\n"
+              "-NO SUCH CONTENT XYZ\n"
+              "+whatever\n")
+r = sh(["patch", "p.diff"], d)
+check("patch all-tiers fail → RED exit1",
+      r.returncode == 1 and "FAILED" in r.stdout, r.stdout[-200:])
+shutil.rmtree(d)
+
+# --- ④ repomap ---
+d = fresh_git_repo()
+(d / "big.py").write_text(
+    "".join(f"def fn{i}():\n    pass\n\n" for i in range(6)))
+(d / "small.py").write_text("def only_one():\n    pass\n")
+os.makedirs(d / "node_modules", exist_ok=True)
+(d / "node_modules" / "junk.js").write_text("function junk() {}\n")
+r = sh(["repomap"], d)
+check("repomap lists files ranked by symbols",
+      r.returncode == 0 and "big.py" in r.stdout
+      and "small.py" in r.stdout, r.stdout)
+lines = [ln for ln in r.stdout.splitlines() if ".py (" in ln]
+check("repomap big.py ranks first",
+      bool(lines) and "big.py" in lines[0], str(lines[:2]))
+check("repomap skips node_modules", "junk.js" not in r.stdout)
+shutil.rmtree(d)
+
+# --- ⑦ overflow forced deterministic compression ---
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location(
+    "_gate", os.path.join(os.path.dirname(__file__), "..", "scripts",
+                          "hca_gate.py"))
+_gate = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_gate)
+huge = "E " + "x" * 50000          # one pathological line
+out = _gate.trim_output(huge, 1000)
+check("overflow compressed under cap", len(out) <= 1100,
+      f"len={len(out)}")
+check("overflow marker present", "overflow compressed" in out)
+check("overflow deterministic",
+      _gate.trim_output(huge, 1000) == out)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
