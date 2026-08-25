@@ -262,5 +262,28 @@ r = sh(["verify"], d)
 check("changed failure set → back to plain RED (not doom)", r.returncode == 1,
       f"rc={r.returncode}")
 
+# --- budget hard stop: token overspend → exit 2 + escalation hint ---
+d = fresh_git_repo()
+(d / "pyproject.toml").write_text("[project]\nname='t'\n")
+(d / "tests").mkdir()
+(d / "tests" / "test_bad.py").write_text(
+    "def test_x():\n    assert 1 == 2\n")
+venv_py = d / ".venv" / "bin"
+venv_py.mkdir(parents=True)
+venv_py.joinpath("python").write_text(
+    "#!/bin/sh\nexec " + sys.executable + " \"$@\"\n")
+venv_py.joinpath("python").chmod(0o755)
+# simulate heavy prior spend directly in state
+st = {"steps": 0, "redfix": {"verify": 4}, "doom": [],
+      "tokens_verify": [9000, 7000]}
+(d / ".hca_state.json").write_text(json.dumps(st))
+r = sh(["verify"], d)
+check("token overspend → exit 2", r.returncode == 2, f"rc={r.returncode}")
+check("overspend reason shown", "cost ~16000 tok" in r.stdout
+      or "cap" in r.stdout, r.stdout[-200:])
+check("escalation hint suggests stronger model",
+      "stronger" in r.stdout and "model" in r.stdout, r.stdout[-300:])
+shutil.rmtree(d)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

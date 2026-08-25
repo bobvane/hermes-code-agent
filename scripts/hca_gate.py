@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""hca_gate.py — hermes-code-agent deterministic gate CLI (v1.6.0)
+"""hca_gate.py — hermes-code-agent deterministic gate CLI (v1.7.0)
 
 The "punch clock" of the hard verify loop. Rules that a model might forget
 become commands that always run. Exit-code semantics are the contract:
@@ -54,6 +54,12 @@ def run(cmd, timeout=300):
 def fail(msg):
     print(f"[HCA-GATE-RED] {msg}")
     sys.exit(1)
+
+
+def hard_stop(msg):
+    """Exit-2 circuit breaker output (budget/doom family)."""
+    print(f"[HCA-GATE-BUDGET] {msg}")
+    sys.exit(2)
 
 
 def ok(msg):
@@ -300,6 +306,33 @@ BUDGET_TOKENS_TIERS = [    # Codex-style multi-tier soft reminders (deduped)
     (3000, "context is getting heavy — prefer targeted reads"),
     (8000, "heavy context: summarize completed steps, drop old tool output"),
 ]
+BUDGET_TOKENS_HARD = 15000     # cumulative verify-digest tokens → hard stop
+BUDGET_RED_CYCLES_HARD = 5     # red cycles before hard stop
+
+
+def budget_hard_stop(st):
+    """v1.7.0 overspend circuit breaker: cumulative verify digest tokens or
+    red-cycle count past the cap → exit-2 stop with an escalate-to-stronger-
+    model suggestion. Returns the reason string or None."""
+    spent = sum(t for t in (st.get("tokens_verify") or [])
+                if isinstance(t, int))
+    n = (st.get("redfix") or {}).get("verify", 0)
+    if spent >= BUDGET_TOKENS_HARD:
+        return (f"verify digests have cost ~{spent} tok this task "
+                f"(cap {BUDGET_TOKENS_HARD})")
+    if n >= BUDGET_RED_CYCLES_HARD:
+        return f"red cycle #{n} reached the cap ({BUDGET_RED_CYCLES_HARD})"
+    return None
+
+
+def budget_escalation_hint():
+    """User-facing advice appended to any hard stop: this model has burned
+    its budget without converging — suggest handing off."""
+    return (
+        "[HCA-GATE] Suggestion for the user: this model has repeatedly "
+        "failed to converge on this task — consider switching to a stronger "
+        "model (e.g. your main coding model) for a fresh attempt, ideally "
+        "from the last snapshot so it starts clean.")
 
 
 def budget_reminder(st):
@@ -477,12 +510,12 @@ def cmd_verify(args):
                   "your diagnosis of why the fix never lands.")
             sys.exit(2)
         n = st["redfix"][key]
-        extra = ""
-        if n >= 5:
-            extra = (" — BUDGET EXHAUSTED: STOP and report a blocker, "
-                     "or revert to last snapshot and change strategy")
-        else:
-            extra = budget_reminder(st)
+        stop_reason = budget_hard_stop(st)
+        if stop_reason:
+            print(budget_escalation_hint())
+            hard_stop(f"{stop_reason} — STOP, report the blocker "
+                      "(see budget suggestion above)")
+        extra = budget_reminder(st)
         fail(f"verify failed (red cycle #{n}{extra})")
     st = load_state()
     st["git_head"] = current_head()

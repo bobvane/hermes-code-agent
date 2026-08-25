@@ -96,10 +96,14 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
   - **failure fingerprint**: 每次 verify RED 提取失败测试 id 集合的 sha1 指纹写入 state(`fail_fp`, cap=阈值); **同一失败集连续 3 轮 → exit 2 熔断**, 明示"你在盲修循环, 停止 patch, 回滚快照或换策略".
   - **语义安全**: 集合序无关/计数无关; 失败集一旦变化(有测试被修好)立即重置——真修复不会误触; collection error 等无 FAILED 行场景返回 None 不参与判定.
   - **自测**: tests/test_hca_gate.py 33 用例全绿(新增语义熔断触发+恢复重置用例); bench 目录实战验证: 同坏实现 3 轮 → exit 2 触发, 改动失败集后回到普通 RED.
+- **v1.7.0 — 预算超支硬熔断 + 换模型建议 (2026-08-25)**:
+  - **实证驱动**: v1.5.1 补测 b2 盲修 5 轮烧掉 ~23.6k token——旧机制只有软提醒, 烧穿预算也不会强制停.
+  - **双阈值硬停**: verify digest 累计 ≥15000 tok 或红轮 ≥5 → exit 2 (与 doom 同级), 输出超支原因.
+  - **升级建议(Bob 提出)**: 硬停时向用户明示"当前模型反复无法收敛, 建议换更强模型从最近快照重新开始"——护栏不止于拦截, 还给出路.
 
 ## 當前版本 / Current version
 
-**v1.6.0** (2026-08-25): doomcheck 语义级检测(同失败集×3 → exit 2). 自测 33/33.
+**v1.7.0** (2026-08-25): 预算超支硬熔断(token≥15k 或红轮≥5 → exit 2) + 升级换模型建议. 自测 36/36.
 
 ## 後續升級目標 / Post-v1.5.1 goals (updated 2026-08-25)
 
