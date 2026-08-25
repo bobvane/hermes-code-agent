@@ -110,6 +110,8 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 ## 當前版本 / Current version
 
+**v1.8.1** (2026-08-25): 总体测试驱动修复 — `run()` 加 per-command 超时 + 进程组 kill（start_new_session + killpg），防死锁 impl 把 pytest runner 挂死时 verify 无法返回；超时降 600s→180s，rc=124 进入红轮/语义 doom 流程。自测 52/52。
+**v1.8.0 总体测试**: 四模型 A/B 对比基准 32 轮，详见 benchmarks/v180-benchmark-report.md。
 **v1.8.0** (2026-08-25): 四仓共识第二批(auto-commit + patch 三级降级 + repomap + overflow 压缩). 自测 52/52.
 
 ## 後續升級目標 / Post-v1.5.1 goals (updated 2026-08-25)

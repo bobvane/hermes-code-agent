@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 1.8.0
+version: 1.8.1
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -160,6 +160,8 @@ Destructive commands (git push, rm -rf, drop db, force flag) ALWAYS require an e
 If the conversation already contains a structured plan (from omh, a written AGENTS.md, or any planner), **consume it as step 2's input** — do not re-plan. If none exists, the mini-plan above suffices. The skill never requires a planner to function.
 
 ## Context management (keeps weak models on track)
+## Benchmark results
+Full A/B benchmark data and the 5-role design review are in `benchmarks/v180-benchmark-report.md` + raw results in `benchmarks/v180_raw_results.json`. Quick takeaway: every green delivered is verified (`exit 0`); weak models still hit a hard ceiling.
 
 - Prefer `search_files` / `read_file` (paged) over dumping whole trees.
 - Before editing, read only the files the change touches + their direct callers.

@@ -39,15 +39,29 @@ MAX_VERIFY_CHARS_DEFAULT = 2000
 # ---------------------------------------------------------------- utilities
 
 def run(cmd, timeout=300):
-    """Run a command; return (returncode, stdout+stderr)."""
+    """Run a command in its own process group; return (returncode, output).
+    On timeout the whole group is killed (start_new_session=True + killpg)
+    so a hang in a child (e.g. impl self-deadlock freezing pytest) can never
+    block the gate — v1.8.1 hardening."""
+    import signal
     try:
         p = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
+            cmd, capture_output=True, text=True, timeout=timeout,
+            start_new_session=True
         )
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except FileNotFoundError:
         return 127, f"command not found: {cmd[0]}"
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as te:
+        # the subprocess.run call already killed the leader; also reap
+        # any surviving process-group members (defensive — impl may fork)
+        pid = getattr(te, "pid", None)
+        if pid is not None:
+            try:
+                import signal
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+            except Exception:
+                pass
         return 124, f"timeout after {timeout}s: {' '.join(cmd)}"
 
 
@@ -625,7 +639,7 @@ def cmd_verify(args):
     last_out = ""
     for c in cmds:
         print(f"$ {c}")
-        rc, out = run(c.split(), timeout=600)
+        rc, out = run(c.split(), timeout=180)
         last_out = out
         print(out[-1500:] if rc != 0 else
               ("PASS" if rc == 0 else out[-800:]))
