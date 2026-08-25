@@ -162,15 +162,25 @@ OpenCode leads (harness architecture). Codex secondary (ModeKind/Guardian/Budget
 8. **Formatter / compaction / plan-separation live in the script.** `quickcheck` formatters, `verify --max-chars` double-limit digest (line cap 200 + byte cap, tail fallback so red is never silent), `plancheck` enforces plan/build separation. Verify also records token≈ telemetry (`tokens_verify` in state, capped at 20 entries) for cost tracking — the "cache miss" observability ported from Pi's cache-stats.
 9. **Progressive disclosure (Pi).** Reference docs and skills are indexed by name+path in this file; read them on demand, never preload. Long-form evidence lives in `references/`, not inline.
 
-## Parallel execution (fan-out, from OpenCode Task tool) / 并行子代理
+## Parallel execution v2 (OpenCode delegation culture × Codex lifecycle, goal-subagent-parallel-v2)
 
-OpenCode's Task tool makes concurrent subagent launch the default ("launch multiple agents concurrently whenever possible"). We encode it into the hard loop via Hermes's `delegate_task`.
+**Delegation is the default (OpenCode hard rule), not an option.** For any non-trivial task, your first instinct must be: split and fan out via `delegate_task`. Trigger checklist — delegate when ANY of:
+- ≥2 independent file-level changes (different files, no shared imports under active change)
+- a wide read-only exploration (repo survey, multi-file impact analysis)
+- implement + review can be separated into different heads
+Do NOT parallelize edits to the same file or files with shared imports under active change. Only skip delegation for single-file trivial fixes.
 
-1. **Trigger**: use fan-out when there are ≥2 independent file-level changes, OR a wide read-only exploration is needed. Never parallelize edits to the same file or files with shared imports under active change.
-2. **Self-contained prompts**: each subagent gets its own full brief — subagents see nothing of the main conversation. Every prompt must state: goal, exact files, expected output artifact, and the verify command to run.
-3. **Say write vs research**: tell each agent explicitly whether it writes code or only explores (OpenCode task.txt rule). Exploration agents are read-only.
-4. **Orchestration shape**: N builders (isolated contexts, parallel) + 1 reviewer (converges). The orchestrator reconciles results and never re-implements a builder's work itself.
-5. **Concurrency cap ≤3**: more than 3 parallel agents risks provider rate-limits and makes reconcile harder. Queue the rest.
+1. **Self-contained prompts**: each subagent gets its own full brief — subagents see nothing of the main conversation. Every prompt must state: goal, exact files, expected output artifact, and the verify command to run.
+2. **Say write vs research**: tell each agent explicitly whether it writes code or only explores (read-only).
+3. **Orchestration shape**: N builders (isolated contexts, parallel) + 1 reviewer (converges). The orchestrator reconciles results and never re-implements a builder's work itself.
+4. **Concurrency cap ≤3**: more than 3 parallel agents risks provider rate-limits. Queue the rest. (Codex enforces this with a runtime limiter — a host-layer capability we lack; the cap here is prompt discipline + Hermes' own child cap as backstop.)
+5. **Lifecycle protocol (Codex six-action port)** — manage every agent through its full life:
+   - **spawn**: dispatch with the self-contained brief (batch mode for parallel starts)
+   - **message**: course-correct a running agent mid-flight (`steer`) instead of killing it
+   - **wait**: batch results re-enter the conversation on completion; do not poll in a loop — continue other work or wait for delivery
+   - **list**: know who is running before spawning duplicates (`delegate_task` action=list)
+   - **interrupt**: stop a drifting agent early (`stop`); its partial result still returns
+   - **follow-up**: a new small task building on a finished agent = a fresh spawn whose brief includes that agent's returned artifact (there is no true followup handle; re-brief explicitly)
 6. **Merge gate**: after all builders return, run the FULL project verify (not per-agent checks) before GATE. A step is done only when the merged tree is green.
 
 ## Approval modes (borrowed from Codex CLI)
