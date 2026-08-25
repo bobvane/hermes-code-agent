@@ -79,12 +79,24 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
   - **verify venv 自举**: runner 缺失时自动尝试 `.venv/bin/python` 重跑, 并输出具体 FIX 命令, 不再让模型盲试.
   - **叙事重构 (四方评审共识)**: 主卖点改为「对一切模型的完成性验证」; 弱模型降级为实验性, 明示支持门槛(编码≥8B激活/通用≥24B).
   - **自测**: 21 用例全绿.
+- **v1.3.0 — 基准协议 v1 固化 (2026-08-25)**:
+  - `benchmarks/protocol.md`: 固定题（嵌套事务+TTL+并发 KVStore, 11 用例裁判）+ guard 封存 + N≥3 + A/B 组定义与判读规则; 工作目录 hca-bench-<date> 测完删除.
+  - `benchmarks/baseline-v1.2.1.md` 双轨基线: OxAlpha 轨 B 首过 10.0/11 收敛 3/3, A 首过 10.67 但 1/3 概率隐藏缺陷出货; DeepSeek v4 Flash 轨 B 10.0/11 (n=2), A 均值 9.33 且 a3 仅 6/11. 结论: 强模型价值=完成性保证, 中档模型=首过率+拦截裸交付缺陷.
+- **v1.4.0 — Pi 可移植项落地 (2026-08-25)**:
+  - verify 输出双限摘要（200 行 + max_chars 字节双 cap, 只保留失败相关行）; tokens≈ 遥测写入 .hca_state.json; 渐进披露精简.
+  - 实测 B 组首过 10.75/11 (n=4), 发现遥测记录原始输出而非展示 digest 的 bug → v1.4.1 修复（telemetry = 模型实际付费阅读的内容）.
+- **v1.5.0 — 四仓共识第一批落地 (2026-08-25)**:
+  - **事务性 snapshot/restore**: git refs/hca/snapshots 快照点, restore 带 cleanliness 校验（快照后新文件删除、快照前改动保留——真事务点语义）; compact 状态压缩 split point; budget_fired 分层软提醒(3000/8000 tok, 同层严格去重).
+  - 验证: OxAlpha 轨 B×3 全部首过 11/11 收敛, 三特性实战验证通过.
+- **v1.5.1 — detect 优先探测项目 venv python (2026-08-25)**:
+  - 验证轮反馈: detect_commands 先探测 `.venv/bin/python`, 消除每轮 verify 的 FileNotFoundError 噪声 (~550 tok/轮).
+  - 补测: DeepSeek v4 Flash 中档轨 B×3 — 首过 9.0/11 (11,5,11), b2 撞 5 轮上限未收敛(commit 路径 doom-loop) → 记录为能力天花板并反哺: doomcheck 对"同测试集语义级重复红"缺检测, 列入 v1.6 候选.
 
 ## 當前版本 / Current version
 
-**v1.2.1** (2026-08-25): guard 反作弊门禁(exit 3) + verify venv 自举 + 模型支持门槛声明. 自测 21/21.
+**v1.5.1** (2026-08-25): detect venv 优先探测; v1.5.0 三特性(事务restore/compact/预算软提醒)经 B×3 实战验证; v4 Flash 中档轨补测完成. SKILL.md version: 1.5.1.
 
-## 後續升級目標 / Post-v1.2.1 goals (decided 2026-08-25)
+## 後續升級目標 / Post-v1.5.1 goals (updated 2026-08-25)
 
 **战略定位**: 只正式支持中强模型（编码特化 ≥8B 激活参数 / 通用 ≥24B），弱模型实验性不担保。目标：让中强模型编程**更准确、成本效率更高**。
 
@@ -103,3 +115,4 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 1. **基线工程**: 把 skill-ab-benchmark 固化为可重复协议（固定 seed/题集/N 次），跑出 v1.2.1 的首过率与 tokens/题基线，写入 benchmarks/.
 2. v1.3+: 以基线为参照逐版验证单目标边际收益；评估 Hermes plugin / ACP-server 程序级硬门禁.
+3. v1.6 候选（按补测反哺排序）: ①doomcheck 语义级检测（同测试集连续 N 轮同失败集 → 熔断提示换策略, 源自 v4 Flash b2 doom-loop 实证）②中档模型轨常态化（每版本同协议补测, 强模型轨已饱和 11/11 失去区分度）③Hermes plugin 程序级硬门禁.
