@@ -327,12 +327,14 @@ def budget_hard_stop(st):
 
 def budget_escalation_hint():
     """User-facing advice appended to any hard stop: this model has burned
-    its budget without converging — suggest handing off."""
+    its budget without converging — suggest handing off. Two short lines
+    (中文 + English), ANSI red so it stands out in the Hermes TUI."""
+    R = "\033[1;31m"
+    X = "\033[0m"
     return (
-        "[HCA-GATE] Suggestion for the user: this model has repeatedly "
-        "failed to converge on this task — consider switching to a stronger "
-        "model (e.g. your main coding model) for a fresh attempt, ideally "
-        "from the last snapshot so it starts clean.")
+        f"{R}⛔ 此模型不胜任此编程任务，建议更换更强模型。{X}\n"
+        f"{R}⛔ This model is unfit for this coding task — switch to a "
+        f"stronger model.{X}")
 
 
 def budget_reminder(st):

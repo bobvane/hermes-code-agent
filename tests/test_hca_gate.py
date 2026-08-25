@@ -283,6 +283,9 @@ check("overspend reason shown", "cost ~16000 tok" in r.stdout
       or "cap" in r.stdout, r.stdout[-200:])
 check("escalation hint suggests stronger model",
       "stronger" in r.stdout and "model" in r.stdout, r.stdout[-300:])
+check("escalation hint is bilingual + red",
+      "此模型不胜任此编程任务" in r.stdout and "\033[1;31m" in r.stdout,
+      repr(r.stdout[-200:]))
 shutil.rmtree(d)
 
 print(f"\n{PASS} passed, {FAIL} failed")
