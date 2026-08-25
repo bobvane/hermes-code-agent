@@ -63,7 +63,7 @@ python scripts/hca_gate.py plancheck       # after PLAN: exit!=0 if sources chan
 python scripts/hca_gate.py quickcheck f.py # after each edit: seconds-level syntax gate
 python scripts/hca_gate.py doomcheck "edit:file:line"  # same tag 3x in a row → exit 2 = STOP this approach
 python scripts/hca_gate.py verify          # GATE: run full test suite; exit code is the verdict
-python scripts/hca_gate.py state show      # resume point: steps/redfix/doom/snapshots (.hca_state.json)
+python scripts/hca_gate.py state show      # inspect loop counters: steps/redfix/doom/snapshots (.hca_state.json)
 ```
 
 Exit-code contract (memorize ONE rule instead of twenty):
