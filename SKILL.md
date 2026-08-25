@@ -192,15 +192,18 @@ Do NOT parallelize edits to the same file or files with shared imports under act
    - **follow-up**: a new small task building on a finished agent = a fresh spawn whose brief includes that agent's returned artifact (there is no true followup handle; re-brief explicitly)
 6. **Merge gate**: after all builders return, run the FULL project verify (not per-agent checks) before GATE. A step is done only when the merged tree is green.
 
-## Approval modes (borrowed from Codex CLI)
+## Approval tiers (Codex approval policy × Cline auto-approve, goal-permission-tiers-v2)
 
-Pick by task risk.
-- **suggest** — propose changes, ask before editing. Use for unfamiliar/prod repos.
-- **auto-edit** — edit + run read-only checks freely; stop only on destructive ops (push, force, delete). Low-risk repeated approvals may use self-review (Advanced pattern 3).
-- **full-auto** — unattended; only for sandboxed/throwaway work. Never default to this.
-- Default is `auto-edit` for local repos you trust.
+One table, four tiers — check it BEFORE any action. L2/L3 use `clarify` as the approval action (the Cline confirm-dialog experience: the user sees and approves before the act).
 
-Destructive commands (git push, rm -rf, drop db, force flag) ALWAYS require an explicit user confirm, regardless of mode.
+| Tier | Operations | Action |
+|---|---|---|
+| **L0 免审** (Cline auto-approve) | read_file / search_files / repomap; git status/diff/log; running tests/lint/build (read-only side effects) | do it, no ask |
+| **L1 常规** (Codex on-failure) | project-file edits via patch/write_file; quickcheck; snapshot/restore within repo; hca_gate commands | do it; report failures honestly |
+| **L2 审批** (Codex untrusted + Cline per-op confirm) | installing dependencies; writing outside the project dir; git commit/push/tag; network downloads (curl/wget/pip/npm install); creating cron jobs | `clarify` first, act only on approval |
+| **L3 红线** (both agents' never-auto set) | deleting data (`rm -rf`, drop, reset --hard); modifying system config; sending messages / publishing / releasing; touching secrets, keys, or restricted paths (~/.ssh/, ~/.aws/, *key*, *secret*); disabling safety rules | `clarify` with a recommended-reject default |
+
+Enforcement reality (honest label): the table is prompt-level knowledge — nothing forces the model to consult it before every act. Post-hoc audit and the user watching L2/L3 clarify prompts are the backstops. Destructive ops need explicit user confirm in EVERY mode, including full-auto.
 
 ## Optional upstream plan (omh / AGENTS.md / other)
 
