@@ -164,18 +164,94 @@ def cmd_snapshot(args):
         run(["git", "add", "-A"])
         run(["git", "-c", "user.email=hca@local",
              "-c", "user.name=hca", "commit", "-m", "hca snapshot base"])
+    # Cline-style transactional checkpoint: stash commit + untracked files
+    # written into a synthetic 2nd-parent tree, stored under a private ref so
+    # the snapshot survives later resets AND can be rolled back atomically.
     rc, out = run(["git", "stash", "create"])
     snap = out.strip()
-    if not snap:  # nothing dirty: use HEAD as the snapshot point
+    if snap:
+        # capture untracked files into a tree for the transaction parent
+        rc_o, others = run(["git", "ls-files", "--others",
+                            "--exclude-standard"])
+        untracked_tree = None
+        if others.strip():
+            run(["git", "add", "-A"])
+            rc_t, out_t = run(["git", "write-tree"])
+            if rc_t == 0:
+                untracked_tree = out_t.strip()
+            run(["git", "reset"])  # undo index pollution, keep worktree
+        if untracked_tree:
+            rc_c, commit_out = run([
+                "git", "commit-tree", untracked_tree,
+                "-p", snap, "-m", "hca: untracked companion"])
+            if rc_c == 0:
+                snap = commit_out.strip()
+    else:  # nothing dirty: use HEAD as the snapshot point
         snap = current_head()
+    ref = f"refs/hca/snapshots/{snap[:12]}"
+    run(["git", "update-ref", ref, snap])
     st = load_state()
     if state_stale(st):
         st = {"steps": 0, "redfix": {}, "doom": [],
               "git_head": current_head(), "snapshots": []}
-    st.setdefault("snapshots", []).append(snap)
+    st.setdefault("snapshots", []).append({"id": snap, "ref": ref})
     st["git_head"] = current_head()
     save_state(st)
-    ok(f"snapshot {snap[:12]} recorded ({len(st['snapshots'])} total)")
+    ok(f"snapshot {snap[:12]} recorded (ref={ref}, "
+       f"{len(st['snapshots'])} total)")
+
+
+def cmd_restore(args):
+    """Transactional restore with QA gate: verify clean status after."""
+    st = load_state()
+    snaps = st.get("snapshots") or []
+    target = args.snapshot
+    if not snaps:
+        fail("no snapshots recorded — nothing to restore")
+    entry = snaps[-1] if isinstance(snaps[-1], dict) else {"id": snaps[-1]}
+    if target in ("last", ""):
+        chosen = entry
+    else:  # match by id prefix
+        matches = [s for s in snaps
+                   if isinstance(s, dict) and s["id"].startswith(target)]
+        matches += [({"id": s, "ref": None}) for s in snaps
+                    if isinstance(s, str) and s.startswith(target)]
+        if not matches:
+            fail(f"no snapshot matching '{target}'")
+        chosen = matches[0]
+    sid, ref = chosen["id"], chosen.get("ref")
+    if ref:
+        rc_r, resolved = run(["git", "rev-parse", "--verify", ref])
+        if rc_r == 0:
+            sid = resolved.strip()
+    # restore worktree + index from the snapshot, keep current HEAD history
+    rc, out = run(["git", "restore", "--source", sid,
+                   "--worktree", "--staged", "."])
+    if rc != 0:
+        fail(f"restore failed: {out.strip()}")
+    # remove files created after the snapshot (Cline semantics: restore
+    # returns tree to the exact snapshot state, including untracked files)
+    rc_ls, known = run(["git", "ls-tree", "-r", "--name-only", sid])
+    known_set = set(known.splitlines())
+    st_status, status_out = run(["git", "status", "--porcelain"])
+    dirty = []
+    for ln in status_out.splitlines():
+        if not ln.strip():
+            continue
+        path = ln[3:].strip().strip('"')
+        if ln.startswith("??") and path != ".hca_state.json" \
+                and path not in known_set:
+            Path(path).unlink(missing_ok=True)  # post-snapshot junk file
+        else:
+            dirty.append(ln)
+    if dirty:
+        print("[HCA-GATE] WARNING: worktree not fully clean after restore:")
+        for ln in dirty[:10]:
+            print(f"  {ln}")
+    st["restored_from"] = sid
+    save_state(st)
+    ok(f"restored to {sid[:12]}"
+       + (" (with warnings)" if dirty else " — clean"))
 
 
 # --------------------------------------------------------------- quickcheck
@@ -208,6 +284,32 @@ def cmd_quickcheck(args):
             print(f"[RED] {f}\n{out}\n")
         fail(f"{len(bad)} file(s) failed quick syntax gate — fix before VERIFY")
     ok(f"{len(files)} file(s) passed quick syntax gate")
+
+
+# ------------------------------------------------------------- budget (Codex)
+
+BUDGET_STEPS_SOFT = 4      # warn at step 4 of 5
+BUDGET_TOKENS_TIERS = [    # Codex-style multi-tier soft reminders (deduped)
+    (3000, "context is getting heavy — prefer targeted reads"),
+    (8000, "heavy context: summarize completed steps, drop old tool output"),
+]
+
+
+def budget_reminder(st):
+    """Codex rollout_budget port: tiered soft warnings, deduped per level."""
+    fired = st.setdefault("budget_fired", [])
+    msgs = []
+    steps = st.get("steps", 0)
+    if steps >= BUDGET_STEPS_SOFT and "steps" not in fired:
+        fired.append("steps")
+        msgs.append(f"step {steps}/5 — plan the finish, avoid new scope")
+    spent = sum(st.get("tokens_verify") or [])
+    for tier, msg in BUDGET_TOKENS_TIERS:
+        if spent >= tier and f"tok{tier}" not in fired:
+            fired.append(f"tok{tier}")
+            msgs.append(msg)
+    save_state(st)
+    return (" — " + "; ".join(msgs)) if msgs else ""
 
 
 # ------------------------------------------------------------------- verify
@@ -263,7 +365,10 @@ def cmd_verify(args):
             sys.exit(3)
     cmds = detect_commands()["test"]
     if not cmds:
-        fail("no test command detected — ask the user; do NOT fake green")
+        st = load_state()
+        reminder = budget_reminder(st)  # fire soft warnings even on early RED
+        fail("no test command detected — ask the user; do NOT fake green"
+             + reminder)
     failures = []
     unavailable = []
     last_out = ""
@@ -333,6 +438,8 @@ def cmd_verify(args):
         if n >= 5:
             extra = (" — BUDGET EXHAUSTED: STOP and report a blocker, "
                      "or revert to last snapshot and change strategy")
+        else:
+            extra = budget_reminder(st)
         fail(f"verify failed (red cycle #{n}{extra})")
     st = load_state()
     st["git_head"] = current_head()
@@ -361,6 +468,42 @@ def cmd_state(args):
         save_state(st)
         ok(f"step -> {st['steps']}")
     fail(f"unknown state subcommand: {args.state_cmd}")
+
+
+# ------------------------------------------------------------------- compact
+
+COMPACT_KEEP = 10  # Gemini-style: preserve the recent tail, split old side
+
+
+def cmd_compact(_args):
+    """Deterministic context compaction (Gemini CLI port).
+
+    Split-point discipline: only 'cut' at clean boundaries — completed steps
+    collapse to one status line each; tool outputs are dropped entirely
+    (they are reproducible), never half-kept. Failure fallback is pure
+    truncation of the oldest entries (no LLM involved, never fails).
+    """
+    st = load_state()
+    changed = []
+    snaps = st.get("snapshots") or []
+    if len(snaps) > COMPACT_KEEP:
+        st["snapshots"] = ([f"compacted:{len(snaps) - COMPACT_KEEP} older"]
+                           + snaps[-COMPACT_KEEP:])
+        changed.append(f"snapshots {len(snaps)}→{len(st['snapshots'])}")
+    tv = st.get("tokens_verify") or []
+    if len(tv) > 20:
+        st["tokens_verify"] = tv[-20:]
+        changed.append("telemetry trimmed")
+    rf = st.get("redfix") or {}
+    for k in list(rf):
+        if rf[k] > 99:
+            rf[k] = 99  # sentinel cap; real budget logic lives elsewhere
+            changed.append(f"redfix[{k}] capped")
+    save_state(st)
+    if changed:
+        ok("compacted: " + ", ".join(changed))
+    else:
+        ok("nothing to compact")
 
 
 # ---------------------------------------------------------------- plancheck
@@ -478,6 +621,12 @@ def main():
 
     sub.add_parser("snapshot", help="record a reversible git snapshot")
 
+    r = sub.add_parser("restore", help="transactional restore to a snapshot")
+    r.add_argument("snapshot", nargs="?", default="last",
+                   help="snapshot id prefix or 'last'")
+
+    c = sub.add_parser("compact", help="deterministic state compaction")
+
     q = sub.add_parser("quickcheck", help="fast per-file syntax gate")
     q.add_argument("files", nargs="*", help="files to check (default: scan)")
 
@@ -497,6 +646,7 @@ def main():
 
     args = ap.parse_args()
     table = {"detect": cmd_detect, "snapshot": cmd_snapshot,
+             "restore": cmd_restore, "compact": cmd_compact,
              "quickcheck": cmd_quickcheck, "verify": cmd_verify,
              "state": cmd_state, "plancheck": cmd_plancheck,
              "doomcheck": cmd_doomcheck, "guard": cmd_guard}

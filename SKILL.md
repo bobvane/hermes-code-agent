@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a hard verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 1.4.1
+version: 1.5.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -127,10 +127,10 @@ OpenCode leads (harness architecture). Codex secondary (ModeKind/Guardian/Budget
 **Pitfall (stream vs non-stream in non-interactive mode):** one-shot invocations (`aider -m`, `opencode run`) are unstable with default streaming — 0-byte files (Aider) or mid-stream crashes (OpenCode). Force `stream=false` / `--no-stream` on headless paths; interactive TUI keeps streaming. Reproduction: `references/non-interactive-streaming-pitfall.md`.
 2. **Per-step model hint (where setup allows).** If the user's Hermes config has more than one model, prefer a stronger model for PLAN/architecture steps and a cheaper one for BUILD/execute steps. OpenCode does this via a per-agent `model` field; we approximate via profile/provider swap at step boundaries.
 3. **Command-segment approval + low-risk self-review.** Split shell commands at operators (`|`, `&&`, `||`, `;`, subshells) and evaluate EACH segment. Destructive segments (`rm`, `git reset --hard`, `drop`, force flags) ALWAYS need explicit user confirm — never auto-approve. For *non-destructive, repeated* approvals in `auto-edit` mode, apply a quick self-review (re-state the action + risk; deny if ambiguous) instead of pinging the user every time — borrowed from Codex's Guardian (fail-closed) pattern; destructive ops never go to self-review.
-4. **Bound the loop + budget.** Step cap (3-5), red→fix cap (5/step), and a soft tool-call cap (~40). On exceed → stop, report blocker. OpenCode encodes this via a `steps` field; Codex via Token/RolloutBudget. We enforce both.
+4. **Bound the loop + budget (Codex soft reminders).** Step cap (5), red→fix cap (5/step), soft tool-call cap (~40). Multi-tier soft reminders fire before hard limits: step 4/5 → "plan the finish"; token tiers (3k/8k) → targeted-read / summarize advice; each tier fires once (deduped in `budget_fired`). On hard exceed → stop, report blocker.
 5. **Repo map before edits (Aider).** Lightweight structural index (symbol defs + import edges) ranked by step relevance; feed top-N symbols only. Biggest context-efficiency win surveyed. Approximate `aider/repomap.py` PageRank.
-6. **Checkpoint before each BUILD step (Cline).** Reversible snapshot (`git stash`/worktree/copy) before editing — first-class rollback rail.
-7. **Model-aware context strategy (Gemini CLI).** Big-window models: load broadly + periodic compress. Small-window: rely on repo map. Pi confirms minimal-kernel + extension design — this skill stays a thin orchestrator.
+6. **Checkpoint before each BUILD step (Cline, transactional).** `snapshot` records stash commit + untracked companion tree under a private ref `refs/hca/snapshots/<id>`; `restore <id|last>` returns the tree to the exact snapshot state (removes post-snapshot junk files), verifies cleanliness, records `restored_from`. First-class rollback rail.
+7. **Model-aware context strategy + deterministic compaction.** Big-window models: load broadly; small-window: repo map. `compact` subcommand trims state deterministically (keep last 10 snapshots + 20 telemetry entries, tail-preserved split, no LLM involved — Gemini-style failure-safe fallback).
 8. **Formatter / compaction / plan-separation live in the script.** `quickcheck` formatters, `verify --max-chars` double-limit digest (line cap 200 + byte cap, tail fallback so red is never silent), `plancheck` enforces plan/build separation. Verify also records token≈ telemetry (`tokens_verify` in state, capped at 20 entries) for cost tracking — the "cache miss" observability ported from Pi's cache-stats.
 9. **Progressive disclosure (Pi).** Reference docs and skills are indexed by name+path in this file; read them on demand, never preload. Long-form evidence lives in `references/`, not inline.
 
