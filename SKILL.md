@@ -65,7 +65,8 @@ The user's confirmation is the switch. This mirrors Cline's Plan/Act button: the
 
 **plancheck is mandatory (not optional) at each boundary:** after PLAN output, before any edit, run `python scripts/hca_gate.py plancheck`. Exit !=0 → roll back the violating edits (`git restore`) before entering BUILD. Enforcement reality (honest label): Codex makes violations physically impossible at the host layer — we cannot. Ours = user-witnessed gates (clarify) + post-hoc audit (plancheck). A violation surfaces immediately because the user just watched the transition.
 
-**Budget ceiling (from Codex Token/RolloutBudget):** cap the whole task at a budget — e.g. max 5 steps, max 5 red→fix cycles per step, and a soft tool-call cap (~40). On exceed, STOP and report a blocker. This is the guard against a weak model looping forever and burning tokens.
+**Budget ceiling v2 (Codex TokenBudget × OpenCode MAX_STEPS, goal-step-budget-cap-v2):**
+explicit step cap: **max 5 steps per task**, max 5 red→fix cycles in the TEST channel (3 for PATCH/STATIC), soft tool-call cap ~40. Multi-tier soft reminders fire ONCE each (deduped): step 4/5 → "plan the finish"; 3k tok → targeted reads; 8k tok → write a progress note first. Source-verified reality (both agents' "hard stop" is message-injection, not a kill): on hard exceed the gate prints a **MAX_STEPS close-out protocol** — no more edits, respond with text only structured as DONE / NOT DONE / NEXT. Follow it; do not attempt further tool calls after an exit-2 budget/doom stop.
 
 **Verify rule v2 — three-channel triage (Aider × OpenCode, goal-verify-loop-v2):**
 after an edit, do NOT run tests blindly. Triage by failure type into three independent channels — cheapest check first. Each channel has its OWN retry budget (they never eat each other's):

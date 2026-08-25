@@ -255,8 +255,18 @@ def cmd_repomap(_args):
 
 
 def hard_stop(msg):
-    """Exit-2 circuit breaker output (budget/doom family)."""
+    """Exit-2 circuit breaker (budget/doom family). OpenCode MAX_STEPS
+    close-out protocol: a hard stop is never silent — the agent must end
+    with a structured wrap-up, not just die."""
     print(f"[HCA-GATE-BUDGET] {msg}")
+    print("""[HCA-GATE] MAX LIMIT REACHED — close-out required. Tools are done for this approach.
+STRICT REQUIREMENTS:
+1. Do NOT make any further edits or tool calls on this task.
+2. Respond with TEXT ONLY, structured as:
+   - DONE: what was accomplished so far (with green checkpoints if any)
+   - NOT DONE: remaining tasks that were not completed
+   - NEXT: concrete recommendation (switch strategy / stronger model / revert)
+Any attempt to keep editing past this line is a critical violation.""")
     sys.exit(2)
 
 
@@ -501,8 +511,12 @@ def cmd_quickcheck(args):
 
 BUDGET_STEPS_SOFT = 4      # warn at step 4 of 5
 BUDGET_TOKENS_TIERS = [    # Codex-style multi-tier soft reminders (deduped)
+    # fixed templates, each fires ONCE per level; the 8k tier carries a
+    # progress-saving directive ported from Codex's context_window_reminder
     (3000, "context is getting heavy — prefer targeted reads"),
-    (8000, "heavy context: summarize completed steps, drop old tool output"),
+    (8000, "heavy context: BEFORE continuing, write a short progress note "
+           "(completed steps / current step / next action) into your working "
+           "notes, then summarize completed steps and drop old tool output"),
 ]
 BUDGET_TOKENS_HARD = 15000     # cumulative verify-digest tokens → hard stop
 BUDGET_RED_CYCLES_HARD = 5     # red cycles before hard stop
