@@ -845,6 +845,68 @@ def cmd_plancheck(_args):
     ok("plan/build separation clean")
 
 
+# ------------------------------------------------------- locate (Aider port)
+
+def _locate_best_span(source_lines, probe_lines):
+    """difflib line-level fuzzy match (Aider did-you-mean, ~90% of
+    tree-sitter precision). Returns (best_ratio, i, j) where source[i:j]
+    is the closest region to probe, or None if probe is empty."""
+    import difflib
+    sm = difflib.SequenceMatcher(None, source_lines, probe_lines)
+    m = sm.find_longest_match(0, len(source_lines), 0, len(probe_lines))
+    if m.size == 0:
+        return None
+    # anchor on the longest common block, then expand the window so the
+    # whole probe could fit (probe may sit before/after the anchor block)
+    lo = max(0, min(m.a - m.b, m.a))
+    hi = min(len(source_lines), max(lo + len(probe_lines), m.a + m.size))
+    # char-level similarity over the window (line-level ratio is too brittle:
+    # a one-char drift on every line would score ~0 even for an obvious hit)
+    window = "\n".join(source_lines[lo:hi])
+    probe_text = "\n".join(probe_lines)
+    ratio = difflib.SequenceMatcher(None, window, probe_text).ratio()
+    return (ratio, lo, hi)
+
+
+def cmd_locate(args):
+    """Aider did-you-mean rescue for failed patches. Give it the file and a
+    snippet the patch expected to find; prints 'you looked for vs actually
+    there' side-by-side with surrounding context. Read-only — never edits."""
+    p = Path(args.file)
+    if not p.exists():
+        fail(f"file not found: {args.file}")
+    text = p.read_text(encoding="utf-8", errors="replace")
+    src_lines = text.splitlines()
+    # probe: stdin or inline arg; strip diff markers so raw hunk bodies work
+    raw = sys.stdin.read() if not args.snippet else args.snippet
+    probe_lines = [ln[1:].rstrip() if ln[:1] in "+- " else ln.rstrip()
+                   for ln in raw.splitlines()
+                   if ln.strip() and not ln.startswith(("---", "+++"))]
+    if not probe_lines:
+        fail("empty probe — pass a snippet on stdin or as argument")
+    hit = _locate_best_span(src_lines, probe_lines)
+    if hit is None:
+        print("[HCA-GATE] no fuzzy anchor found at all — the target code "
+              "may not exist in this file. Re-read the file before patching.")
+        sys.exit(1)
+    ratio, lo, hi = hit
+    print(f"[HCA-GATE-LOCATE] best match: lines {lo + 1}-{hi} "
+          f"(similarity {ratio:.0%})")
+    ctx_lo, ctx_hi = max(0, lo - 3), min(len(src_lines), hi + 3)
+    print("--- context ---")
+    for n in range(ctx_lo, ctx_hi):
+        marker = ">>" if lo <= n < hi else "  "
+        print(f"{marker} {n + 1:4d}| {src_lines[n]}")
+    print("--- you looked for (first 8 lines) ---")
+    for ln in probe_lines[:8]:
+        print(f"   ?| {ln}")
+    if ratio < 0.6:
+        print("[HCA-GATE] low similarity — likely wrong file or the code "
+              "moved. Locate by symbol search instead of blind re-patching.")
+        sys.exit(1)
+    sys.exit(0)
+
+
 # ---------------------------------------------------------------- doomcheck
 
 def cmd_doomcheck(args):
@@ -906,12 +968,19 @@ def main():
     d = sub.add_parser("doomcheck", help="doom-loop detection by action tag")
     d.add_argument("tag")
 
+    lc = sub.add_parser("locate", help="Aider did-you-mean: fuzzy-locate a "
+                        "snippet in a file after a patch miss (read-only)")
+    lc.add_argument("file", help="source file to search in")
+    lc.add_argument("snippet", nargs="?", default=None,
+                    help="expected snippet (default: stdin, diff markers ok)")
+
     args = ap.parse_args()
     table = {"detect": cmd_detect, "snapshot": cmd_snapshot,
              "restore": cmd_restore, "compact": cmd_compact,
              "quickcheck": cmd_quickcheck, "verify": cmd_verify,
              "state": cmd_state, "plancheck": cmd_plancheck,
              "doomcheck": cmd_doomcheck,
+             "locate": cmd_locate,
              "patch": cmd_patch, "repomap": cmd_repomap}
     table[args.cmd](args)
 

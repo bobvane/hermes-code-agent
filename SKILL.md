@@ -67,7 +67,18 @@ The user's confirmation is the switch. This mirrors Cline's Plan/Act button: the
 
 **Budget ceiling (from Codex Token/RolloutBudget):** cap the whole task at a budget — e.g. max 5 steps, max 5 red→fix cycles per step, and a soft tool-call cap (~40). On exceed, STOP and report a blocker. This is the guard against a weak model looping forever and burning tokens.
 
-**Verify rule (Aider-style retry discipline):** "not green = not done" is a prompt-level discipline (same as Aider's auto-retry). Run the project's tests via `python scripts/hca_gate.py verify` — if red, feed the exact error back, fix, re-run, up to 3 retries. If the script is unavailable in this environment, run the project's tests manually and say so explicitly.
+**Verify rule v2 — three-channel triage (Aider × OpenCode, goal-verify-loop-v2):**
+after an edit, do NOT run tests blindly. Triage by failure type into three independent channels — cheapest check first. Each channel has its OWN retry budget (they never eat each other's):
+
+| Channel | Trigger | Action first | Budget |
+|---|---|---|---|
+| ① PATCH channel | `patch`/apply failed to land | did-you-mean rescue: `python scripts/hca_gate.py locate <file>` with the expected snippet → feed the printed "looked-for vs actually-there" context back and re-patch | 3 tries |
+| ② STATIC channel | patch landed but syntax/lint errors | fix directly from the quickcheck/lint output (seconds-level fail-fast) | 3 tries |
+| ③ TEST channel | static clean, tests run and red | feed the exact verify digest back, fix, re-run | 5 red→fix cycles |
+
+Rules: never jump to the test suite while ① or ② is failing; never re-patch while a test digest is the actual signal. Global ceiling still applies (see budget). Run the project's tests via `python scripts/hca_gate.py verify` — if red, feed the exact error back, fix, re-run. If the script is unavailable in this environment, run the project's tests manually and say so explicitly.
+
+Forced-loop discipline (OpenCode): the error output IS your next input — processed, not paraphrased. You have no authority to declare done on red; only the gate exit code speaks.
 
 ## Deterministic gate: scripts/hca_gate.py / 确定性门禁脚本（v1.2.1 核心）
 
@@ -79,6 +90,7 @@ python scripts/hca_gate.py snapshot        # before BUILD: record reversible git
 python scripts/hca_gate.py plancheck       # after PLAN: exit!=0 if sources changed during planning → roll back
 python scripts/hca_gate.py quickcheck f.py # after each edit: seconds-level syntax gate
 python scripts/hca_gate.py doomcheck "edit:file:line"  # same tag 3x in a row → exit 2 = STOP this approach
+python scripts/hca_gate.py locate f.py <<< "expected snippet"  # did-you-mean: fuzzy-locate after a patch miss (read-only)
 python scripts/hca_gate.py verify          # GATE: run full test suite; exit code is the verdict
 python scripts/hca_gate.py state show      # inspect loop counters: steps/redfix/doom/snapshots (.hca_state.json)
 ```

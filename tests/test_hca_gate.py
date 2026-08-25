@@ -379,5 +379,29 @@ check("overflow marker present", "overflow compressed" in out)
 check("overflow deterministic",
       _gate.trim_output(huge, 1000) == out)
 
+# --- ⑧ locate: Aider did-you-mean fuzzy rescue (read-only) ---
+d = Path(tempfile.mkdtemp(prefix="hca_locate_"))
+(d / "s.py").write_text(
+    "def foo():\n    return 1\n\n\ndef bar(x):\n    y = x * 22\n    return y + 1\n")
+probe = "def bar(x):\n    y = x * 2\n    return y + 1\n"
+r = subprocess.run([sys.executable, GATE, "locate", str(d / "s.py")],
+                   input=probe, capture_output=True, text=True)
+check("locate finds near-match with high similarity",
+      r.returncode == 0 and "similarity 9" in r.stdout
+      and "def bar(x):" in r.stdout, r.stdout[:200])
+(d / "s.py").write_text("class TotallyDifferent:\n    pass\n")
+r = subprocess.run([sys.executable, GATE, "locate", str(d / "s.py")],
+                   input=probe, capture_output=True, text=True)
+check("locate rejects no-anchor file",
+      r.returncode == 1 and "no fuzzy anchor" in r.stdout, r.stdout[:200])
+hunk = "-    y = x * 22\n+    y = x * 33\n     return y + 1\n"
+(d / "s.py").write_text("def foo():\n    return 1\n\n\ndef bar(x):\n"
+                        "    y = x * 22\n    return y + 1\n")
+r = subprocess.run([sys.executable, GATE, "locate", str(d / "s.py")],
+                   input=hunk, capture_output=True, text=True)
+check("locate strips diff markers from probe",
+      r.returncode == 0, r.stdout[:200])
+shutil.rmtree(d)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
