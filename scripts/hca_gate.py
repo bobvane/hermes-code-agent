@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""hca_gate.py — hermes-code-agent deterministic gate CLI (v1.7.0)
+"""hca_gate.py — hermes-code-agent verify-loop CLI
 
-The "punch clock" of the hard verify loop. Rules that a model might forget
-become commands that always run. Exit-code semantics are the contract:
+The "punch clock" of the verify loop. Rules that a model might forget
+become commands that always run. Exit-code semantics:
 
-    exit 0  → green, step may proceed / task may report done
-    exit !=0 → red, HARD BLOCK: the agent must NOT report done
+    exit 0  → green
+    exit !=0 → red / blocked
 
 Subcommands:
     detect              Print detected test/lint/build commands for this repo
     snapshot            Create a reversible git snapshot; prints snapshot id
     quickcheck [files]  Fast per-file syntax gate (+ format when available)
     verify [--max-chars N]  Run full test suite; output trimmed to error lines
-    state [show|reset|bump KEY]  Persistent loop state (.hca_state.json)
+    state [show|reset|bump KEY]  Loop counters (.hca_state.json)
     plancheck           Verify plan/build separation: fail if source changed in PLAN
     doomcheck TAG       Doom-loop detection: same TAG 3x in a row → exit 2
-    guard record|check  Judge/test file integrity (anti-tamper oracle hashes)
 
-Exit codes: 0 green · 1 red/blocked · 2 doom stop · 3 judge tampered
+Exit codes: 0 green · 1 red/blocked · 2 doom stop
 
 Stdlib only. No third-party dependencies. Python 3.8+.
 """
@@ -896,7 +895,7 @@ def main():
     sub.add_parser("repomap", help="lightweight symbol-ranked repo map")
     q.add_argument("files", nargs="*", help="files to check (default: scan)")
 
-    v = sub.add_parser("verify", help="run full test suite (hard gate)")
+    v = sub.add_parser("verify", help="run full test suite")
     v.add_argument("--max-chars", type=int, default=MAX_VERIFY_CHARS_DEFAULT)
 
     s = sub.add_parser("state", help="loop state: show|reset|bump")

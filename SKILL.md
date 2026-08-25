@@ -12,14 +12,14 @@ metadata:
     title_zh: Hermes 代码助手（自纠错编程工作流）
 ---
 
-# Hermes Code Agent — 硬验证循环
+# Hermes Code Agent — 验证循环
 
 > **Hermes 代码助手（自纠错编程工作流）**
-> 把 Hermes 变成一个会自己纠错的编程智能体：用「先验证、后完成」的硬循环（实现→测试/校验→修复→全绿才算完成）包裹模型，让中档及以上模型的产出可靠、可验证。弱模型（<8B 激活参数）可用但属**实验性**——实测它们会绕过门禁甚至篡改测试凑绿，结果不作担保。
+> 把 Hermes 变成一个会自己纠错的编程智能体：用「先验证、后完成」的循环（实现→测试/校验→修复→全绿才算完成）包裹模型。机制对齐六家开源 coding agent（OpenCode / Codex CLI / Aider / Cline / Gemini CLI / Pi），不引入它们之外的原创机制。
 
-Turn Hermes into a self-correcting coding agent. The model alone — **at any tier** — will sometimes declare "done" on a red build or a missing file; this skill is the harness that forces a **verify-before-done** loop with machine-enforced gates (exit codes, not prompts), making mid-to-large models reliably correct.
+Turn Hermes into a self-correcting coding agent with a verify-before-done loop (implement → test → fix → green), the same skeleton every major open coding agent converges on.
 
-**Model support policy（模型支持门槛）**: designed for coding-specialized models ≥8B active params or general models ≥24B. Smaller models may run it experimentally (gates still block faked greens and tampered tests), but convergence is NOT guaranteed — empirically, sub-8B models fail via context collapse or oracle-tampering, which no harness can fully prevent.
+**Model support policy（模型支持门槛）**: designed for coding-specialized models ≥8B active params or general models ≥24B. Smaller models may run it experimentally, but convergence is NOT guaranteed.
 
 Cross-validated against two open-source agents read at equal depth: **OpenCode** (model-agnostic harness, LSP feedback, subagent fan-out, per-agent model) and **OpenAI Codex CLI** (ModeKind plan/exec split, Guardian fail-closed approval, Token/RolloutBudget cost ceiling). See `references/inspiration.md`.
 
@@ -50,7 +50,7 @@ Every implementation task goes through this. The agent must NOT report "done" un
 
 **Budget ceiling (from Codex Token/RolloutBudget):** cap the whole task at a budget — e.g. max 5 steps, max 5 red→fix cycles per step, and a soft tool-call cap (~40). On exceed, STOP and report a blocker. This is the guard against a weak model looping forever and burning tokens.
 
-**Gate rule (exit-code semantics, v1.2.0):** "not green = not done" is now **machine-enforced**, not advisory. Run `python scripts/hca_gate.py verify` — exit 0 = green (may report done); **exit != 0 = HARD BLOCK: you must NOT report done.** Never summarize past a red gate. If the script is unavailable in this environment, fall back to running the project's tests manually and say so explicitly.
+**Verify rule (Aider-style retry discipline):** "not green = not done" is a prompt-level discipline (same as Aider's auto-retry). Run the project's tests via `python scripts/hca_gate.py verify` — if red, feed the exact error back, fix, re-run, up to 3 retries. If the script is unavailable in this environment, run the project's tests manually and say so explicitly.
 
 ## Deterministic gate: scripts/hca_gate.py / 确定性门禁脚本（v1.2.1 核心）
 
