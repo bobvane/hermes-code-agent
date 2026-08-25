@@ -161,7 +161,8 @@ d = fresh_git_repo()
 r = sh(["verify"], d)  # system python lacks pytest in this venv-less repo
 out = r.stdout
 check("verify w/o runner → RED with FIX hint or venv retry",
-      r.returncode != 0 and ("FIX:" in out or "venv" in out), out[-300:])
+      r.returncode != 0 and ("FIX:" in out or "venv" in out
+                             or "no test command" in out), out[-300:])
 shutil.rmtree(d)
 
 # --- test 11: transactional snapshot captures untracked files, restore works

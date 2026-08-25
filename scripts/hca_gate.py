@@ -106,9 +106,16 @@ def detect_commands():
     tests_dir = Path("tests").is_dir() or list(Path().glob("test_*.py")) \
         or list(Path("tests").glob("test_*.py") if Path("tests").is_dir() else [])
     if py and tests_dir:
-        for c in PY_TEST:
+        # prefer project venv python first (avoids FileNotFoundError noise
+        # when system python lacks the runner — found in v1.5.0 bench round)
+        candidates = []
+        for vpy in (".venv/bin/python", "venv/bin/python"):
+            if has(vpy):
+                candidates.append([vpy, "-m", "pytest", "-q"])
+        candidates.extend(PY_TEST)
+        for c in candidates:
             rc, _ = run(c + ["--co", "-q"], timeout=60)
-            if rc != 127:
+            if rc == 0:  # only accept a runner that actually works
                 cmds["test"].append(" ".join(c))
                 break
         if has(".ruff.toml") or has("ruff.toml") or py:
