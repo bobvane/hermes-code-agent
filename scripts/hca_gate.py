@@ -308,7 +308,8 @@ def cmd_verify(args):
             fail("cannot run verification — install the runner first; "
                  "do NOT fake green")
     if failures:
-        for c, trimmed in failures:
+        digests = [(c, trimmed) for c, trimmed in failures]
+        for c, trimmed in digests:
             print(f"\n[VERIFY-RED] `{c}` failed. Error digest "
                   f"(~{estimate_tokens(trimmed)} tok):\n{trimmed}")
         # record red cycle in state + cost telemetry
@@ -320,7 +321,10 @@ def cmd_verify(args):
         rf[key] = rf.get(key, 0) + 1
         st["redfix"] = rf
         tv = [t for t in (st.get("tokens_verify") or []) if isinstance(t, int)]
-        tv.append(estimate_tokens(last_out))
+        # record the digest actually shown to the agent (post-trim), so
+        # telemetry matches what the model paid to read — not raw output.
+        shown = "\n".join(d for _, d in digests)
+        tv.append(estimate_tokens(shown))
         st["tokens_verify"] = tv[-20:]  # compaction: keep telemetry lean
         st["git_head"] = current_head()
         save_state(st)
