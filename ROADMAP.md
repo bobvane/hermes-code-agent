@@ -110,6 +110,8 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 ## 當前版本 / Current version
 
+**v2.0.1** (2026-08-26): locate 模糊救援重写——从 difflib 整行序列匹配（探针行与源码行需逐字一致，差一个参数即报"找不到"）改为逐行字符级相似度评分：每条探针行独立找最像的源码行（去缩进后比对+长度门槛加速），无硬阈值——永远报告最佳候选区域+平均相似度+逐行分数明细，判断权交给模型；相似度低时附提示但不阻断。10+2 场景实测全过：子串探针、差参数、缩进漂移、tab/space、多行混合、改名变量、不存在代码、中文行、空探针、文件缺失、apply→locate 真实救援链路。
+
 **v2.0.0** (2026-08-26): 第二批功能落地（三项实施 + 八项砍除）。实施：①项目规则文件两层设计——全局层 `CONVENTIONS.md` 随 Skill 分发（templates/CONVENTIONS.md 六节骨架）+ 项目层 `<项目名>.md` 放项目目录内随项目走，入口检测协议（缺目录/缺规则文件才提问，齐全静默加载），项目层覆盖全局层，首次生成按技术栈代填；②仓库结构图两张索引卡——目录卡（Cline 式列目录树）+ 符号卡（Aider 式 ripgrep 抽 class/def/function 定义行），任务开始出目录卡、挑完相关文件再出符号卡；③补丁容错应用——Codex apply-patch 全量移植：`apply` 子命令实现 seek_sequence 四级匹配引擎（精确→rstrip→trim→Unicode 归一化，逐级降级不跳级）、防御性补丁解析器、ApplyPatchError 结构化错误（PARSE/MATCH/IO + hunk 定位 + expected/actual 对照）、单文件原子写入（任一 hunk 失败整补丁不落盘）、EOF 追加特判。实测通过：四级匹配逐级验证、原子性拒绝、结构化错误回喂、畸形补丁解析报错。砍除（Bob 拍板）：快照回滚、编辑后自动 commit、编辑格式自适应、LSP 实时诊断、上下文压缩、会话持久恢复、内核沙箱、技能/扩展体系——宿主已有或形态做不到或单家冷门，项目材料中不再提及。测试目录清空待重写。
 
 **v1.8.2** (2026-08-25): 对标收敛 — 移除三个六家参照均无的原创机制：①guard 反作弊子系统（judge sha256 封存 + exit 3）②exit-code 硬门禁降级为 Aider 式提示词重试纪律（≤3 次）③state 断点恢复口径（state 保留为 doomcheck/budget 内部计数器）。政策依据：Bob 定"六家没有的不做、有的尽量加"。自测 47/47。

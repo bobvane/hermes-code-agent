@@ -1065,24 +1065,39 @@ def cmd_plancheck(_args):
 # ------------------------------------------------------- locate (Aider port)
 
 def _locate_best_span(source_lines, probe_lines):
-    """difflib line-level fuzzy match (Aider did-you-mean, ~90% of
-    tree-sitter precision). Returns (best_ratio, i, j) where source[i:j]
-    is the closest region to probe, or None if probe is empty."""
+    """Per-line fuzzy scoring (no hard threshold — report best candidate +
+    its score; the model judges). For each probe line, find the source line
+    with the highest char-level similarity (after whitespace-stripping so
+    indentation drift never zeroes a match). Returns
+    (avg_ratio, lo, hi, per_line) where per_line is a list of
+    (probe_idx, src_idx, ratio) for reporting, or None if probe is empty."""
     import difflib
-    sm = difflib.SequenceMatcher(None, source_lines, probe_lines)
-    m = sm.find_longest_match(0, len(source_lines), 0, len(probe_lines))
-    if m.size == 0:
+    norm_src = [ln.strip() for ln in source_lines]
+    scores = []  # (best_ratio, probe_i, src_j)
+    for pi, pline in enumerate(probe_lines):
+        p = pline.strip()
+        if not p:
+            continue
+        best, bj = 0.0, -1
+        for sj, sline in enumerate(norm_src):
+            if abs(len(sline) - len(p)) > max(len(sline), len(p)) * 0.7:
+                continue  # cheap length gate before SequenceMatcher
+            r = difflib.SequenceMatcher(None, sline, p).ratio()
+            if r > best:
+                best, bj = r, sj
+        scores.append((best, pi, bj))
+    if not scores:
         return None
-    # anchor on the longest common block, then expand the window so the
-    # whole probe could fit (probe may sit before/after the anchor block)
-    lo = max(0, min(m.a - m.b, m.a))
-    hi = min(len(source_lines), max(lo + len(probe_lines), m.a + m.size))
-    # char-level similarity over the window (line-level ratio is too brittle:
-    # a one-char drift on every line would score ~0 even for an obvious hit)
-    window = "\n".join(source_lines[lo:hi])
-    probe_text = "\n".join(probe_lines)
-    ratio = difflib.SequenceMatcher(None, window, probe_text).ratio()
-    return (ratio, lo, hi)
+    per_line = [(pi, bj, r) for r, pi, bj in scores]
+    hits = [s for s in scores if s[0] > 0.3]
+    if not hits:
+        # nothing even remotely similar: report the least-bad anchor anyway
+        hits = [max(scores)]
+    lo = min(h[2] for h in hits if h[2] >= 0)
+    hi = max(h[2] for h in hits if h[2] >= 0) + 1
+    hi = min(max(hi, lo + len(probe_lines)), len(source_lines))
+    avg = sum(h[0] for h in scores) / len(scores)
+    return (avg, lo, hi, per_line)
 
 
 def cmd_locate(args):
@@ -1106,9 +1121,12 @@ def cmd_locate(args):
         print("[HCA-GATE] no fuzzy anchor found at all — the target code "
               "may not exist in this file. Re-read the file before patching.")
         sys.exit(1)
-    ratio, lo, hi = hit
-    print(f"[HCA-GATE-LOCATE] best match: lines {lo + 1}-{hi} "
-          f"(similarity {ratio:.0%})")
+    ratio, lo, hi, per_line = hit
+    print(f"[HCA-GATE-LOCATE] best region: lines {lo + 1}-{hi} "
+          f"(avg similarity {ratio:.0%})")
+    for pi, sj, r in per_line:
+        where = f"line {sj + 1}" if sj >= 0 else "NO similar line found"
+        print(f"  probe[{pi + 1}] {r:.0%} -> {where}")
     ctx_lo, ctx_hi = max(0, lo - 3), min(len(src_lines), hi + 3)
     print("--- context ---")
     for n in range(ctx_lo, ctx_hi):
@@ -1120,8 +1138,7 @@ def cmd_locate(args):
     if ratio < 0.6:
         print("[HCA-GATE] low similarity — likely wrong file or the code "
               "moved. Locate by symbol search instead of blind re-patching.")
-        sys.exit(1)
-    sys.exit(0)
+    sys.exit(0)  # always exit 0: evidence is delivered, the model judges
 
 
 # ---------------------------------------------------------------- doomcheck
