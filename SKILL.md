@@ -153,7 +153,16 @@ OpenCode leads (harness architecture). Codex secondary (ModeKind/Guardian/Budget
 1. **Delegate by default for non-trivial tasks.** Do not implement + review in the same head. Use `delegate_task`: one builder agent (isolated context) + one reviewer agent, run in parallel, then reconcile. Use the reusable prompts in `references/parallel-implement-review.md`. Both OpenCode (Task tool) and Codex (multi_agents_v2) converge on this.
 
 **Pitfall (stream vs non-stream in non-interactive mode):** one-shot invocations (`aider -m`, `opencode run`) are unstable with default streaming — 0-byte files (Aider) or mid-stream crashes (OpenCode). Force `stream=false` / `--no-stream` on headless paths; interactive TUI keeps streaming. Reproduction: `references/non-interactive-streaming-pitfall.md`.
-2. **Per-step model hint (where setup allows).** If the user's Hermes config has more than one model, prefer a stronger model for PLAN/architecture steps and a cheaper one for BUILD/execute steps. OpenCode does this via a per-agent `model` field; we approximate via profile/provider swap at step boundaries.
+2. **Per-role model tiers (OpenCode declarative mapping × Codex elasticity, goal-per-role-model-v2).**
+   Role→tier mapping (declarative, like OpenCode's per-agent `model` field):
+
+   | Step/role | Tier | Why |
+   |---|---|---|
+   | PLAN / architecture / root-cause diagnosis | strong tier (largest reasoning model configured) | planning errors cascade into every later step |
+   | BUILD / mechanical edits / test-fix loops | economy tier (cheapest model that passes verify) | high volume, low decision density |
+   | REVIEW / code-review / security scan | mid or strong tier | judgment-heavy but cheaper than planning |
+
+   **Boundary check (non-blocking reminder):** at every step boundary, check whether the current model matches this step's tier from the table. Mismatch → tell the user once: "本步骤建议切换到<档次>模型（/model），不切换则继续" — then CONTINUE with whatever model is active. The Skill cannot route requests (host-layer, form-factor limit); the user switching gains the benefit, not switching costs nothing — the loop never waits for a model change.
 3. **Command-segment approval + low-risk self-review.** Split shell commands at operators (`|`, `&&`, `||`, `;`, subshells) and evaluate EACH segment. Destructive segments (`rm`, `git reset --hard`, `drop`, force flags) ALWAYS need explicit user confirm — never auto-approve. For *non-destructive, repeated* approvals in `auto-edit` mode, apply a quick self-review (re-state the action + risk; deny if ambiguous) instead of pinging the user every time — borrowed from Codex's Guardian (fail-closed) pattern; destructive ops never go to self-review.
 4. **Bound the loop + budget (Codex soft reminders).** Step cap (5), red→fix cap (5/step), soft tool-call cap (~40). Multi-tier soft reminders fire before hard limits: step 4/5 → "plan the finish"; token tiers (3k/8k) → targeted-read / summarize advice; each tier fires once (deduped in `budget_fired`). On hard exceed → stop, report blocker.
 5. **Repo map before edits (Aider).** Lightweight structural index (symbol defs + import edges) ranked by step relevance; feed top-N symbols only. Biggest context-efficiency win surveyed. Approximate `aider/repomap.py` PageRank.
