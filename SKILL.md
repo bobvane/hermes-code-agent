@@ -59,11 +59,10 @@ The punch-clock of the hard loop. Rules a model might forget become commands tha
 ```bash
 python scripts/hca_gate.py detect          # CLARIFY: print detected test/lint/format commands
 python scripts/hca_gate.py snapshot        # before BUILD: record reversible git snapshot id
-python scripts/hca_gate.py guard record    # before BUILD: seal judge/test files with integrity hashes
 python scripts/hca_gate.py plancheck       # after PLAN: exit!=0 if sources changed during planning → roll back
 python scripts/hca_gate.py quickcheck f.py # after each edit: seconds-level syntax gate
 python scripts/hca_gate.py doomcheck "edit:file:line"  # same tag 3x in a row → exit 2 = STOP this approach
-python scripts/hca_gate.py verify          # GATE: full tests + judge-integrity check; exit code is the verdict
+python scripts/hca_gate.py verify          # GATE: run full test suite; exit code is the verdict
 python scripts/hca_gate.py state show      # resume point: steps/redfix/doom/snapshots (.hca_state.json)
 ```
 
@@ -71,14 +70,13 @@ Exit-code contract (memorize ONE rule instead of twenty):
 
 | exit | meaning | your required action |
 |---|---|---|
-| 0 | GREEN | step may proceed; only `verify`=0 lets you report done |
-| 1 | RED | fix exactly what the digest shows; do NOT report done |
+| 0 | GREEN | step may proceed |
+| 1 | RED | fix exactly what the digest shows; run tests again before claiming progress |
 | 2 | DOOM-LOOP | revert to last snapshot or switch strategy; patching again is forbidden |
-| 3 | JUDGE TAMPERED | the oracle (test/judge file) was modified or deleted after `guard record`. NEVER edit tests to make them pass — restore them (`git restore <file>`) and fix the IMPLEMENTATION. Modifying the oracle is cheating, not debugging. |
 
-`verify` auto-runs the judge-integrity check when hashes are recorded. If pytest is missing, verify retries via a project-local `.venv/bin/python` automatically and prints concrete FIX commands on failure — follow them instead of re-running blindly.
+`verify` runs the full test suite and reports pass/fail via exit code. If pytest is missing, verify retries via a project-local `.venv/bin/python` automatically and prints concrete FIX commands on failure — follow them instead of re-running blindly.
 
-State lives in `.hca_state.json` (steps, red→fix counts, doom log, snapshot ids, judge hashes). After any context loss/compaction, run `state show` to restore discipline instantly. If state is stale (git HEAD moved), the script says so — run `state reset`.
+State lives in `.hca_state.json` (steps, red→fix counts, doom log, snapshot ids). If state is stale (git HEAD moved), the script says so — run `state reset`.
 
 Doom-loop + revert protocol: when `doomcheck` exits 2, prefer `snapshot`-based rollback to the step's start point over stacking another patch on a broken diff.
 

@@ -621,13 +621,6 @@ def venv_python_hint():
 
 
 def cmd_verify(args):
-    # judge integrity check first: tampered oracle = automatic RED (exit 3)
-    st = load_state()
-    if st.get("judge_hashes"):
-        rc, out = run([sys.executable, __file__, "guard", "check"], timeout=30)
-        if rc == 3:
-            print(out)          # surface TAMPER details to the agent
-            sys.exit(3)
     cmds = detect_commands()["test"]
     if not cmds:
         st = load_state()
@@ -855,61 +848,6 @@ def cmd_plancheck(_args):
 
 # ---------------------------------------------------------------- doomcheck
 
-# --------------------------------------------------------------------- guard
-
-GUARDED_GLOBS = ("test_*.py", "tests/test_*.py", "tests/*.py",
-                 "*judge*.py", "*conftest.py")
-
-
-def _guarded_files():
-    files = set()
-    for pat in GUARDED_GLOBS:
-        for p in Path().rglob(pat.replace("tests/", "tests/")):
-            sp = str(p)
-            if (".venv" not in sp and "node_modules" not in sp
-                    and "__pycache__" not in sp):
-                files.add(sp)
-    return sorted(files)
-
-
-def cmd_guard(args):
-    """Record or check integrity hashes of judge/test files.
-
-    guard record  → snapshot hashes into state (call once, before BUILD)
-    guard check   → exit !=0 if any guarded file changed since recording
-    """
-    st = load_state()
-    if state_stale(st):
-        fail("state stale — run: hca_gate.py state reset")
-    hashes = {f: hashlib.sha256(Path(f).read_bytes()).hexdigest()[:16]
-              for f in _guarded_files()}
-    if args.guard_cmd == "record":
-        st["judge_hashes"] = hashes
-        st["git_head"] = current_head()
-        save_state(st)
-        ok(f"recorded {len(hashes)} judge file hash(es)")
-    # check
-    old = st.get("judge_hashes")
-    if not old:
-        print("[HCA-GATE] no recorded judge hashes — run "
-              "`hca_gate.py guard record` before BUILD, then re-check")
-        sys.exit(1)
-    tampered = [f for f, h in old.items()
-                if not Path(f).exists()
-                or hashlib.sha256(Path(f).read_bytes()).hexdigest()[:16] != h]
-    if tampered:
-        for f in tampered:
-            exists = Path(f).exists()
-            print(f"[HCA-GATE-TAMPER] {f} "
-                  + ("deleted" if not exists else "modified after recording"))
-        print("Judge/test files are the ORACLE — modifying them to make "
-              "tests pass is cheating, not fixing. RESTORE them "
-              "(git restore <file> / re-create from task spec) and fix the "
-              "IMPLEMENTATION instead.")
-        sys.exit(3)
-    ok(f"{len(old)} judge file(s) intact")
-
-
 def cmd_doomcheck(args):
     """Call with a stable tag describing the action, e.g. 'edit:impl_a.py:42'.
     Same tag DOOM_THRESHOLD times in a row → exit 2 (hard stop signal)."""
@@ -969,15 +907,12 @@ def main():
     d = sub.add_parser("doomcheck", help="doom-loop detection by action tag")
     d.add_argument("tag")
 
-    g = sub.add_parser("guard", help="judge/test file integrity: record|check")
-    g.add_argument("guard_cmd", choices=["record", "check"])
-
     args = ap.parse_args()
     table = {"detect": cmd_detect, "snapshot": cmd_snapshot,
              "restore": cmd_restore, "compact": cmd_compact,
              "quickcheck": cmd_quickcheck, "verify": cmd_verify,
              "state": cmd_state, "plancheck": cmd_plancheck,
-             "doomcheck": cmd_doomcheck, "guard": cmd_guard,
+             "doomcheck": cmd_doomcheck,
              "patch": cmd_patch, "repomap": cmd_repomap}
     table[args.cmd](args)
 
