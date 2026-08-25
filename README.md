@@ -22,11 +22,11 @@ cp -r . ~/.hermes/skills/hermes-code-agent/
 
 ## 功能对照表（六家开源 agent × 本 Skill）
 
-依据四次源码深扒（详见 `references/`）。✓=已实现，半=部分实现/近似形态，✗=未做。
+依据源码深扒（详见 `references/`）。✓=已实现，半=部分实现/近似形态，✗=未做。
 
 | 功能 | OpenCode | Codex CLI | Aider | Cline | Gemini CLI | Pi | 本 Skill |
 |---|---|---|---|---|---|---|---|
-| 测试反馈重试循环 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ 三通道分流+did-you-mean定位救援 |
+| 测试反馈重试循环 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ 三通道分流+结构化错误自愈 |
 | 计划/执行分离 | 半 | ✓ 双模式 | ✗ | ✓ Plan/Act | ✗ | ✗ | ✓ 双段模式指令+clarify阶段门 |
 | 子代理并行 | ✓ | ✓ | ✗ | ✗ | ✓ | ✓扩展 | ✓ 委派默认化+生命周期编排 |
 | 每角色不同模型 | ✓ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ 角色-档次映射表(提醒制) |
@@ -34,18 +34,8 @@ cp -r . ~/.hermes/skills/hermes-code-agent/
 | 并发数限制 | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ ≤3并发上限 |
 | 权限审批分级 | ✓ | ✓ | ✗ | ✓ | ✗ | ✗ | ✓ 四档操作分级表 |
 | 危险命令拦截 | ✗ | ✓ execpolicy | ✗ | ✗ | ✓ 注入检测 | ✗ | ✓ check_cmd双引擎移植 |
-| 项目规则文件 | AGENTS.md | AGENTS.md | CONVENTIONS | .clinerules | GEMINI.md | ✗ | ✓ AGENTS.md可选覆盖 |
-| 仓库结构图 | ✗ | ✗ | ✓ PageRank | ✗ | ✗ | ✗ | ✓ repomap简化版 |
-| 快照回滚 | ✓ undo | ✗ | 常规git | ✓ shadow-git | ✓ 轻量 | ✗ | ✓ snapshot/restore事务性 |
-| 编辑后自动commit | ✗ | ✗ | ✓ | ✗ | ✗ | ✗ | ✓ autocommit |
-| 补丁容错应用 | ✗ | ✓ 三级降级 | ✓ 多级容错 | ✗ | ✗ | ✗ | ✓ patch三级降级 |
-| 编辑格式自适应 | ✗ | ✗ | ✓ 按模型选 | ✗ | ✗ | ✗ | ✗ 未做 |
-| LSP实时诊断 | ✓ | ✗ | ✗ | ✓ IDE | ✗ | ✗ | ✗ 形态限制 |
-| 上下文压缩 | ✓ 本地 | ✓ 远程 | ✗ | ✓ | ✓ | ✗ | ✓ compact确定性压缩 |
-| 会话持久恢复 | ✗ | ✓ JSONL | ✗ | ✗ | ✗ | ✗ | 半 内部计数器 |
-| 内核沙箱 | ✗ | ✓ Landlock | ✗ | ✗ | ✗ | ✗ | ✗ 形态限制 |
-| 技能/扩展体系 | ✗ | ✓ skills | ✗ | ✗ | ✗ | ✓ 内核 | ✓ 本身即Hermes skill |
+| 项目规则文件 | AGENTS.md | AGENTS.md | CONVENTIONS | .clinerules | GEMINI.md | ✗ | ✓ 全局CONVENTIONS+项目层自动生成 |
+| 仓库结构图 | ✗ | ✗ | ✓ PageRank | ✗ | ✗ | ✗ | ✓ 两张索引卡(目录卡+符号卡) |
+| 补丁容错应用 | ✗ | ✓ apply-patch | ✓ 多级容错 | ✗ | ✗ | ✗ | ✓ seek_sequence四级匹配全量移植 |
 
-**覆盖率：19 项对标功能已实现 17 项。** 未做的 2 项均为 Skill 形态硬限制（LSP 实时诊断、内核沙箱——需要宿主程序层能力）；1 项待做（编辑格式自适应，第二批计划）。
-
-> 本表随功能实现逐步更新；全部完成后再整体重写 README。
+> 本表只列在做的功能；随每步实现更新，全部完成后再整体重写 README。

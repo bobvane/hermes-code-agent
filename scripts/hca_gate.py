@@ -15,6 +15,8 @@ Subcommands:
     state [show|reset|bump KEY]  Loop counters (.hca_state.json)
     plancheck           Verify plan/build separation: fail if source changed in PLAN
     doomcheck TAG       Doom-loop detection: same TAG 3x in a row → exit 2
+    apply < patch.diff  Codex apply-patch port: seek_sequence 4-level match,
+                        atomic per-file write, structured errors on failure
 
 Exit codes: 0 green · 1 red/blocked · 2 doom stop
 
@@ -190,6 +192,207 @@ def _wsfree_span(text, key):
     for span in _wsfree_iter(text, knorm):
         return span
     return None
+
+
+# ------------------------------------------------- apply (Codex apply-patch port)
+# Verbatim port of Codex codex-rs/apply-patch: seek_sequence four-level
+# matching, defensive hunk parsing, structured errors, atomic application.
+
+import unicodedata as _unicodedata
+
+
+class ApplyPatchError(Exception):
+    """Structured patch failure (Codex ApplyPatchError): distinguishes IO vs
+    match errors and carries the hunk index + expected-vs-actual context so
+    the model can self-heal on the next attempt."""
+
+    def __init__(self, kind, message, hunk=None, expected=None, actual=None):
+        self.kind = kind          # "io" | "parse" | "match"
+        self.message = message
+        self.hunk = hunk          # 1-based hunk index, None = whole patch
+        self.expected = expected  # list[str] lines the patch looked for
+        self.actual = actual      # list[str] lines actually at the location
+        super().__init__(self.render())
+
+    def render(self):
+        parts = [f"[{self.kind.upper()}] {self.message}"]
+        if self.hunk is not None:
+            parts.append(f"hunk #{self.hunk}")
+        if self.expected is not None:
+            parts.append("expected:\n" + "\n".join(f"  | {l}" for l in self.expected[:8]))
+        if self.actual is not None:
+            parts.append("actually there:\n" + "\n".join(f"  | {l}" for l in self.actual[:8]))
+        return "\n".join(parts)
+
+
+def _seek_sequence(lines, pattern):
+    """Codex seek_sequence.rs verbatim: locate `pattern` (list[str]) inside
+    `lines` (list[str]). Four progressive levels — never skip a level:
+      L1 exact · L2 rstrip (trailing ws) · L3 trim both sides ·
+      L4 Unicode-normalized (curly quotes/dashes → ASCII)
+    Returns the starting line index of the FIRST match at the loosest level
+    that finds one, preferring matches near EOF for end-of-file anchors.
+    Returns None when all four levels fail."""
+    n, m = len(lines), len(pattern)
+    if m == 0 or m > n:
+        return None
+
+    def norm(s):
+        # L4 normalization: NFKC + typographic punctuation folded to ASCII
+        s = _unicodedata.normalize("NFKC", s)
+        table = str.maketrans({
+            "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+            "\u2013": "-", "\u2014": "-", "\u2026": "...",
+            "\u00a0": " ", "\u200b": "",
+        })
+        return s.translate(table)
+
+    variants = [
+        [ln for ln in pattern],                                  # L1 exact
+        [ln.rstrip() for ln in pattern],                         # L2 rstrip
+        [ln.strip() for ln in pattern],                          # L3 trim
+        [norm(ln).strip() for ln in pattern],                    # L4 unicode
+    ]
+    targets = [
+        list(lines),
+        [ln.rstrip() for ln in lines],
+        [ln.strip() for ln in lines],
+        [norm(ln).strip() for ln in lines],
+    ]
+    for level in range(4):
+        pat = variants[level]
+        hay = targets[level]
+        # scan from the END first: EOF-anchored patches prefer tail matches
+        found = None
+        for i in range(n - m, -1, -1):
+            if hay[i:i + m] == pat:
+                found = i
+                break
+        if found is not None:
+            return found
+    return None
+
+
+_HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def parse_patch(patch_text):
+    """Defensive patch parser (Codex parser.rs semantics, adapted to our
+    unified-diff input): split into per-file blocks; each block is a list of
+    hunks; each hunk = {"old": [...], "new": [...], "context_before": [...]}.
+    Malformed input raises ApplyPatchError('parse', ...) — never crashes."""
+    blocks = []
+    cur = None
+    for raw in patch_text.splitlines():
+        m = re.match(r"\+\+\+ (?:b/)?(\S+)", raw)
+        if m and not raw.startswith("---"):
+            cur = {"path": m.group(1), "lines": []}
+            blocks.append(cur)
+            continue
+        if cur is not None:
+            if raw.startswith(("diff --git",)) or (
+                    raw.startswith("--- ") and not raw.startswith("--- \t")):
+                cur = None
+                continue
+            cur["lines"].append(raw)
+    if not blocks:
+        raise ApplyPatchError("parse", "no parseable file blocks in patch")
+    for b in blocks:
+        hunks, old, new = [], [], []
+        saw_header = False
+        for ln in b["lines"]:
+            hm = _HUNK_HEADER.match(ln)
+            if hm:
+                if old or new:
+                    hunks.append({"old": old, "new": new})
+                old, new = [], []
+                saw_header = True
+                continue
+            if not saw_header and ln.startswith(("-", "+")) and not ln.startswith(("---", "+++")):
+                pass  # tolerate missing @@ headers: treat as single hunk
+            if ln.startswith("+") and not ln.startswith("+++"):
+                new.append(ln[1:])
+            elif ln.startswith("-") and not ln.startswith("---"):
+                old.append(ln[1:])
+            elif ln.startswith(" "):
+                old.append(ln[1:])
+                new.append(ln[1:])
+            elif ln.startswith("\\"):
+                continue  # "\ No newline at end of file"
+            else:
+                raise ApplyPatchError(
+                    "parse", f"malformed diff line in {b['path']}: {ln[:40]!r}")
+        if old or new:
+            hunks.append({"old": old, "new": new})
+        if not hunks:
+            raise ApplyPatchError("parse",
+                                  f"file block {b['path']} has no hunks")
+        b["hunks"] = hunks
+    return blocks
+
+
+def apply_seek_patch_file(path, hunks):
+    """Apply parsed hunks to ONE file atomically via seek_sequence. All hunks
+    must land or nothing is written (Codex atomicity). Raises
+    ApplyPatchError on the first failing hunk with expected/actual context."""
+    p = Path(path)
+    try:
+        text = p.read_text(encoding="utf-8") if p.exists() else ""
+    except OSError as e:
+        raise ApplyPatchError("io", f"cannot read {path}: {e}")
+    lines = text.splitlines()
+    # apply bottom-up so earlier indices stay valid after splices
+    resolved = []
+    for idx, h in enumerate(hunks, start=1):
+        pos = _seek_sequence(lines, h["old"]) if h["old"] else len(lines)
+        if pos is None:
+            # structured error with expected-vs-actual rescue context
+            probe = _locate_best_span(lines, h["old"] or [""])
+            actual = lines[probe[1]:probe[2]] if probe else \
+                lines[max(0, len(lines) - 6):]
+            raise ApplyPatchError(
+                "match", f"context not found in {path}", hunk=idx,
+                expected=h["old"], actual=actual)
+        resolved.append((pos, h))
+    for pos, h in sorted(resolved, key=lambda t: -t[0]):
+        if h["old"]:
+            lines[pos:pos + len(h["old"])] = h["new"]
+        else:
+            lines[pos:pos] = h["new"]
+    try:
+        p.write_text("\n".join(lines) + ("\n" if lines else ""),
+                     encoding="utf-8")
+    except OSError as e:
+        raise ApplyPatchError("io", f"cannot write {path}: {e}")
+
+
+def cmd_apply(args):
+    """Codex-style tolerant patch application (apply-patch module port).
+    Parse → seek_sequence 4-level match → atomic write per file.
+    On ANY failure: print the structured error (which hunk, expected vs
+    actually-there) so the model can fix the patch and retry — exit 1."""
+    patch_text = Path(args.patch_file).read_text(encoding="utf-8") \
+        if args.patch_file else sys.stdin.read()
+    try:
+        blocks = parse_patch(patch_text)
+    except ApplyPatchError as e:
+        print(f"[HCA-GATE-RED]\n{e.render()}")
+        print("[HCA-GATE] Fix the patch format and re-submit.")
+        sys.exit(1)
+    results = []
+    for b in blocks:
+        try:
+            apply_seek_patch_file(b["path"], b["hunks"])
+            results.append((b["path"], len(b["hunks"])))
+        except ApplyPatchError as e:
+            print(f"[HCA-GATE-RED]\n{e.render()}")
+            print("[HCA-GATE] PATCH channel: feed this error back, adjust "
+                  "the patch (run `locate <file>` for fuzzy rescue), "
+                  "re-submit. The file was NOT modified.")
+            sys.exit(1)
+    for path, nh in results:
+        print(f"  ok  {path} ({nh} hunk(s), seek_sequence)")
+    ok(f"patch applied atomically to {len(results)} file(s)")
 
 
 # ----------------------------------------------------------------- repo map
@@ -1142,6 +1345,12 @@ def main():
                         "(Codex execpolicy x Gemini substitution scan)")
     cc.add_argument("command", help="full shell command line to evaluate")
 
+    ap_ = sub.add_parser("apply", help="Codex apply-patch port: tolerant "
+                         "patch application (seek_sequence 4-level match, "
+                         "atomic, structured errors)")
+    ap_.add_argument("patch_file", nargs="?", default=None,
+                     help="patch file (default: stdin)")
+
     args = ap.parse_args()
     table = {"detect": cmd_detect, "snapshot": cmd_snapshot,
              "restore": cmd_restore, "compact": cmd_compact,
@@ -1149,7 +1358,7 @@ def main():
              "state": cmd_state, "plancheck": cmd_plancheck,
              "doomcheck": cmd_doomcheck,
              "locate": cmd_locate, "check_cmd": cmd_check_cmd,
-             "patch": cmd_patch, "repomap": cmd_repomap}
+             "patch": cmd_patch, "repomap": cmd_repomap, "apply": cmd_apply}
     table[args.cmd](args)
 
 

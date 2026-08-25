@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 1.9.0
+version: 2.0.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -73,9 +73,11 @@ after an edit, do NOT run tests blindly. Triage by failure type into three indep
 
 | Channel | Trigger | Action first | Budget |
 |---|---|---|---|
-| ① PATCH channel | `patch`/apply failed to land | did-you-mean rescue: `python scripts/hca_gate.py locate <file>` with the expected snippet → feed the printed "looked-for vs actually-there" context back and re-patch | 3 tries |
+| ① PATCH channel | `apply`/`patch` failed to land | structured error self-heal: the gate prints which hunk failed + expected-vs-actually-there → fix the patch and re-`apply`; for deep misses run `python scripts/hca_gate.py locate <file>` with the snippet | 3 tries |
 | ② STATIC channel | patch landed but syntax/lint errors | fix directly from the quickcheck/lint output (seconds-level fail-fast) | 3 tries |
 | ③ TEST channel | static clean, tests run and red | feed the exact verify digest back, fix, re-run | 5 red→fix cycles |
+
+**Preferred edit path (Codex parity):** emit unified-diff patches and land them with `python scripts/hca_gate.py apply <patch-or-stdin>`. The engine is the Codex apply-patch port: seek_sequence four-level matching (exact → rstrip → trim → Unicode-normalized, never skipping levels), atomic per-file writes (any hunk fails → nothing is written), and structured errors ([PARSE]/[MATCH]/[IO] + hunk index + expected/actual context) designed to be fed back for model self-healing. `patch` (git-apply 3-tier) remains as fallback; plain `write_file` only for new files or full rewrites.
 
 Rules: never jump to the test suite while ① or ② is failing; never re-patch while a test digest is the actual signal. Global ceiling still applies (see budget). Run the project's tests via `python scripts/hca_gate.py verify` — if red, feed the exact error back, fix, re-run. If the script is unavailable in this environment, run the project's tests manually and say so explicitly.
 
@@ -92,6 +94,7 @@ python scripts/hca_gate.py plancheck       # after PLAN: exit!=0 if sources chan
 python scripts/hca_gate.py quickcheck f.py # after each edit: seconds-level syntax gate
 python scripts/hca_gate.py doomcheck "edit:file:line"  # same tag 3x in a row → exit 2 = STOP this approach
 python scripts/hca_gate.py locate f.py <<< "expected snippet"  # did-you-mean: fuzzy-locate after a patch miss (read-only)
+python scripts/hca_gate.py apply < patch.diff  # land a unified diff (Codex seek_sequence engine, atomic)
 python scripts/hca_gate.py verify          # GATE: run full test suite; exit code is the verdict
 python scripts/hca_gate.py state show      # inspect loop counters: steps/redfix/doom/snapshots (.hca_state.json)
 ```
@@ -112,11 +115,20 @@ Doom-loop + revert protocol: when `doomcheck` exits 2, prefer `snapshot`-based r
 
 **API resilience (from OpenCode retry.ts):** when calling model APIs directly (curl/scripts), build in: max 5 retries, exponential backoff starting at 2s (×2), respect `retry-after` headers, and treat 429/5xx/network errors as retryable. Prefer non-streaming (`stream:false`) for long code generations through proxy gateways — streaming is prone to mid-stream drops.
 
-## Zero-config by default（零配置，无需 AGENTS.md）
+## Project rules: two-layer conventions（两层规则文件，goal-project-rules-v2）
 
-> Install once, zero-config. No per-project file copying required.
+**Layer 1 — global**: `skills/hermes-code-agent/CONVENTIONS.md` ships with the skill (template in `templates/CONVENTIONS.md`, six-section skeleton: 通用纪律/工具链/编码规范/提交纪律/测试验证/禁区). The user may edit it; Hermes's bundled-skill user-modified mechanism preserves edits across upgrades. Read it at task start if present.
 
-**Universal safety rules（内置硬性安全规则，无需外部文件）** — always enforced, with or without an AGENTS.md:
+**Layer 2 — per project**: `<项目目录>/<项目名>.md`. Lives INSIDE the project directory so `mv` carries it with the repo. Name source: user-stated name > directory name > name fixed inside the file once generated.
+
+**Entry check protocol (every coding task, before CLARIFY):**
+1. Detect the project directory → none? clarify: "项目需要专属目录，建议 <workspace>/<项目名>/，确认？"
+2. Detect `<项目名>.md` → present? load silently. Missing? generate it from `templates/project-rules.md`, auto-filled from detected stack (vitest → vitest commands, not blanks for the user to fill).
+Both present → silent pass, zero interruption; only missing pieces trigger questions.
+
+**Conflict rule**: project layer overrides global layer per-item (near wins); Section 1 通用纪律 is non-overridable.
+
+**Universal safety rules（内置硬性安全规则，无需外部文件）** — always enforced, with or without any rules file:
 - Run the project's test/lint/build and reach green before reporting "done" (the GATE rule above).
 - Never commit secrets or `.env` files.
 - Never `force` push to `main`/`master` (or the repo's protected branch).
@@ -130,7 +142,7 @@ Doom-loop + revert protocol: when `doomcheck` exits 2, prefer `snapshot`-based r
 - Has a `Makefile`? prefer `make test` / `make lint` / `make build`.
 - If detection is ambiguous or the user stated a command, use that. Only ask in CLARIFY if truly undetectable.
 
-**AGENTS.md is now fully optional（AGENTS.md 仅为可选覆盖）** — `templates/AGENTS.md` is NOT required. The skill already enforces the above by itself. Use AGENTS.md ONLY to *override* auto-detected defaults or add project-specific conventions (naming, layout, out-of-scope). If present at repo root, the skill consumes it as an override; if absent, it runs identically.
+**Rules file is optional override** — the two-layer conventions above (global CONVENTIONS.md + per-project `<项目名>.md`) add project-specific overrides on top of the built-in defaults. If neither exists, the skill runs identically (auto-detect + built-in safety).
 
 ## Stage workers (call these, don't duplicate them) / 阶段性协作工具
 
@@ -165,7 +177,10 @@ OpenCode leads (harness architecture). Codex secondary (ModeKind/Guardian/Budget
    **Boundary check (non-blocking reminder):** at every step boundary, check whether the current model matches this step's tier from the table. Mismatch → tell the user once: "本步骤建议切换到<档次>模型（/model），不切换则继续" — then CONTINUE with whatever model is active. The Skill cannot route requests (host-layer, form-factor limit); the user switching gains the benefit, not switching costs nothing — the loop never waits for a model change.
 3. **Command-segment approval + low-risk self-review.** Split shell commands at operators (`|`, `&&`, `||`, `;`, subshells) and evaluate EACH segment. Destructive segments (`rm`, `git reset --hard`, `drop`, force flags) ALWAYS need explicit user confirm — never auto-approve. For *non-destructive, repeated* approvals in `auto-edit` mode, apply a quick self-review (re-state the action + risk; deny if ambiguous) instead of pinging the user every time — borrowed from Codex's Guardian (fail-closed) pattern; destructive ops never go to self-review.
 4. **Bound the loop + budget (Codex soft reminders).** Step cap (5), red→fix cap (5/step), soft tool-call cap (~40). Multi-tier soft reminders fire before hard limits: step 4/5 → "plan the finish"; token tiers (3k/8k) → targeted-read / summarize advice; each tier fires once (deduped in `budget_fired`). On hard exceed → stop, report blocker.
-5. **Repo map before edits (Aider).** Lightweight structural index (symbol defs + import edges) ranked by step relevance; feed top-N symbols only. Biggest context-efficiency win surveyed. Approximate `aider/repomap.py` PageRank.
+5. **Repo map: two index cards (Aider × Cline, goal-repo-map-v2).** Build the map in two passes — coarse first, expand on demand:
+   - **Card 1 目录卡 (directory card, Cline-style)** — at every task start: list the project tree (file names only) via `search_files(target='files')` or `ls -R`, excluding junk dirs (`node_modules/ .git/ __pycache__/ venv/ .venv/ dist/ build/`). Answers "项目长什么样、东西在哪".
+   - **Card 2 符号卡 (symbol card, Aider-style)** — on demand, AFTER picking task-relevant files from Card 1: extract definition lines from those files with `search_files(pattern='^\\s*(class |def |function |fn |func )', target='content')` (ripgrep ships with Hermes). Answers "这个文件里有什么功能、该去哪改".
+   Flow: 任务开始 → 目录卡(全景) → 按需求挑相关文件 → 符号卡(细节) → 动手. Never build the symbol card for the whole repo — relevance judgment is yours, informed by the task (an advantage Aider's blind indexer lacks; its tree-sitter+PageRank precision is traded for zero-dependency ripgrep, ~90% of the value).
 6. **Checkpoint before each BUILD step (Cline, transactional).** `snapshot` records stash commit + untracked companion tree under a private ref `refs/hca/snapshots/<id>`; `restore <id|last>` returns the tree to the exact snapshot state (removes post-snapshot junk files), verifies cleanliness, records `restored_from`. First-class rollback rail.
 7. **Model-aware context strategy + deterministic compaction.** Big-window models: load broadly; small-window: repo map. `compact` subcommand trims state deterministically (keep last 10 snapshots + 20 telemetry entries, tail-preserved split, no LLM involved — Gemini-style failure-safe fallback).
 8. **Formatter / compaction / plan-separation live in the script.** `quickcheck` formatters, `verify --max-chars` double-limit digest (line cap 200 + byte cap, tail fallback so red is never silent), `plancheck` enforces plan/build separation. Verify also records token≈ telemetry (`tokens_verify` in state, capped at 20 entries) for cost tracking — the "cache miss" observability ported from Pi's cache-stats.
@@ -239,6 +254,6 @@ Full A/B benchmark data and the 5-role design review are in `benchmarks/v180-ben
 
 1. Drop `hermes-code-agent/` into `~/.hermes/skills/` (or your Hermes skills dir). **That's it — zero config.**
 2. In chat: "build X", "fix bug in Y", "refactor Z" — the loop runs automatically. Safety rules and test/lint commands are built-in.
-3. (Optional) If you want project-specific overrides (e.g. a non-standard test command or extra conventions), copy `templates/AGENTS.md` into that repo and edit it. **This step is NOT required** — the skill auto-detects commands and enforces safety on its own.
+3. (Optional) Project-specific conventions: the skill generates `<项目名>.md` in your project on first contact (auto-filled from detected stack), or you can edit the global `CONVENTIONS.md` inside the skill directory. **Neither is required** — auto-detect + built-in safety work alone.
 
 See `ROADMAP.md` for the project's intent and the `references/` folder for source analysis.
