@@ -46,7 +46,24 @@ Every implementation task goes through this. The agent must NOT report "done" un
 7. REPEAT for next step. Then report: what changed, what's green, what's untested.
 ```
 
-**Plan/Build separation (from Codex ModeKind):** planning and editing are distinct modes with distinct discipline. Plan = look and decide; Build = touch as little as possible and verify. Never plan and edit in the same breath.
+**Plan/Build separation v2 (Codex ModeKind × Cline Plan/Act, goal-plan-exec-split-v2):**
+planning and editing are distinct modes with distinct discipline — never plan and edit in the same breath.
+
+**Two mode scripts (Codex-style prompt-level split).** When you enter a mode, your behavior contract is EXACTLY that mode's text:
+
+- **PLAN mode discipline**: read, search, explore, decide. Output a 3–5 step mini-plan (files to touch, approach, done-criteria). FORBIDDEN in PLAN: `patch` / `write_file` / any source edit; running mutating commands. If an upstream plan exists, consume it and skip to the BUILD gate.
+- **BUILD mode discipline**: touch as little as possible, one change per step, verify each step. No re-planning mid-build; if the plan proves wrong, exit back through the stage gate (below), never silently switch cognition.
+
+**Stage gate at every PLAN↔BUILD boundary (Cline-style user switch).** Do not cross a mode boundary on your own authority — ask:
+
+```text
+clarify("切换模式？", choices=["进入 BUILD（按方案执行）", "留在 PLAN（继续规划）"])   # PLAN → BUILD
+clarify("回到规划？", choices=["回 PLAN 重新规划", "留在 BUILD 继续修"])             # BUILD → PLAN
+```
+
+The user's confirmation is the switch. This mirrors Cline's Plan/Act button: the human sees and authorizes every transition.
+
+**plancheck is mandatory (not optional) at each boundary:** after PLAN output, before any edit, run `python scripts/hca_gate.py plancheck`. Exit !=0 → roll back the violating edits (`git restore`) before entering BUILD. Enforcement reality (honest label): Codex makes violations physically impossible at the host layer — we cannot. Ours = user-witnessed gates (clarify) + post-hoc audit (plancheck). A violation surfaces immediately because the user just watched the transition.
 
 **Budget ceiling (from Codex Token/RolloutBudget):** cap the whole task at a budget — e.g. max 5 steps, max 5 red→fix cycles per step, and a soft tool-call cap (~40). On exceed, STOP and report a blocker. This is the guard against a weak model looping forever and burning tokens.
 
