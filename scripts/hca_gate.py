@@ -946,7 +946,157 @@ def cmd_doomcheck(args):
     ok(f"action logged ({len(doom)}/{DOOM_THRESHOLD})")
 
 
-# --------------------------------------------------------------------- main
+# ------------------------------------------------- check_cmd (Codex execpolicy
+#                                                   × Gemini shell-utils port)
+
+POLICY_FILE = Path(__file__).resolve().parent / "cmd_policy.yaml"
+
+# Gemini detectBashSubstitution port: quote-aware scan for $(`, backtick,
+# and <(/>( process substitution. Escapes respected; single quotes suppress.
+def _detect_substitution(command):
+    in_single = in_double = False
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if ch == "'" and not in_double:
+            in_single = not in_single
+            i += 1
+            continue
+        if ch == '"' and not in_single:
+            in_double = not in_double
+            i += 1
+            continue
+        if in_single:
+            i += 1
+            continue
+        if ch == "\\" and i + 1 < n:
+            if in_double and command[i + 1] in "$`\"\\\n":
+                i += 2
+                continue
+            if not in_double:
+                i += 2
+                continue
+        if ch == "$" and i + 1 < n and command[i + 1] == "(":
+            return "command substitution $()"
+        if not in_double and ch in "<>" and i + 1 < n and command[i + 1] == "(":
+            return f"process substitution {ch}()"
+        if ch == "`":
+            return "backtick substitution"
+        i += 1
+    return None
+
+
+def _split_segments(command):
+    """Split a compound shell command at && || ; | (top-level only — inside
+    quotes is data). Each segment is checked independently (both upstreams)."""
+    segments, cur = [], []
+    in_single = in_double = False
+    i, n = 0, len(command)
+    while i < n:
+        ch = command[i]
+        if ch == "'" and not in_double:
+            in_single = not in_single
+        elif ch == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and not in_double and ch in "&;|":
+            # consume && / ||
+            if i + 1 < n and command[i + 1] == ch:
+                i += 1
+            segments.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    segments.append("".join(cur))
+    return [s.strip() for s in segments if s.strip()]
+
+
+def _shlex_tokens(segment):
+    import shlex as _shlex
+    try:
+        return _shlex.split(segment)
+    except ValueError:
+        return segment.split()
+
+
+def _load_policy():
+    """Load the YAML rule table with a stdlib-only mini-parser (no PyYAML
+    dependency): reads `default_decision` and flat `{pattern: [...],
+    decision: ..., reason: ...}` list items."""
+    default, rules = "confirm", []
+    if POLICY_FILE.exists():
+        for raw in POLICY_FILE.read_text(encoding="utf-8").splitlines():
+            ln = raw.split("#", 1)[0].strip()
+            if ln.startswith("default_decision:"):
+                default = ln.split(":", 1)[1].strip() or default
+                continue
+            if "- {" not in ln or "pattern:" not in ln:
+                continue
+            body = ln[ln.index("{") + 1:ln.rindex("}")]
+            m_pat = re.search(r"pattern:\s*\[(.*?)\]", body)
+            if not m_pat:
+                continue
+            toks = [t.strip().strip("\"'") for t in m_pat.group(1).split(",")
+                    if t.strip()]
+            m_dec = re.search(r"decision:\s*(\w+)", body)
+            m_rea = re.search(r"reason:\s*(.+)$", body[m_pat.end():]
+                              if m_dec else body)
+            rules.append({
+                "pattern": toks,
+                "decision": m_dec.group(1) if m_dec else "confirm",
+                "reason": (m_rea.group(1).strip()
+                           if m_rea else "matched policy rule"),
+            })
+    return default, rules
+
+
+def cmd_check_cmd(args):
+    """Three-state verdict on a shell command line (Codex Decision semantics:
+    allow / deny / confirm), applied PER SEGMENT of compound commands, plus
+    Gemini-style injection scanning. Exit codes: 0 allow · 1 deny · 3 confirm
+    (non-zero so it can never be mistaken for green)."""
+    default, rules = _load_policy()
+
+    # injection scan first — any substitution anywhere → confirm w/ reason
+    inj = _detect_substitution(args.command)
+    verdicts = []
+    for seg in _split_segments(args.command):
+        toks = _shlex_tokens(seg)
+        if not toks:
+            continue
+        best = None  # longest-prefix-wins (Codex matches_for_command)
+        for r in rules:
+            p = r["pattern"]
+            if len(toks) >= len(p) and toks[:len(p)] == p:
+                if best is None or len(p) > len(best["pattern"]):
+                    best = r
+        v = dict(best) if best else {"pattern": toks[:2], "reason": "not in "
+                                     "policy table", "decision": default}
+        if best is None and inj:
+            v["reason"] = f"{inj} detected"
+        elif inj and v["decision"] == "allow":
+            # an allowed verb wrapped around substitution is NOT safe anymore
+            v["decision"], v["reason"] = "confirm", f"{inj} inside command"
+        verdicts.append((seg, v))
+
+    final, worst = "allow", None
+    for seg, v in verdicts:
+        print(f"  [{v['decision'].upper():7s}] {seg}   ({v['reason']})")
+        order = {"deny": 0, "confirm": 1, "allow": 2}
+        if order[v["decision"]] < order[final]:
+            final, worst = v["decision"], v
+
+    if final == "deny":
+        fail(f"DENY: {worst['reason']}. Do NOT run this; propose a safer "
+             "alternative.")
+    if final == "confirm":
+        print("[HCA-GATE-CONFIRM] show the FULL original command to the user "
+              "and get explicit approval (clarify) before running:")
+        print(f"  >> {args.command}")
+        sys.exit(3)
+    ok("command cleared by policy")
+
 
 def main():
     ap = argparse.ArgumentParser(prog="hca_gate.py",
@@ -988,13 +1138,17 @@ def main():
     lc.add_argument("snippet", nargs="?", default=None,
                     help="expected snippet (default: stdin, diff markers ok)")
 
+    cc = sub.add_parser("check_cmd", help="three-state command policy check "
+                        "(Codex execpolicy x Gemini substitution scan)")
+    cc.add_argument("command", help="full shell command line to evaluate")
+
     args = ap.parse_args()
     table = {"detect": cmd_detect, "snapshot": cmd_snapshot,
              "restore": cmd_restore, "compact": cmd_compact,
              "quickcheck": cmd_quickcheck, "verify": cmd_verify,
              "state": cmd_state, "plancheck": cmd_plancheck,
              "doomcheck": cmd_doomcheck,
-             "locate": cmd_locate,
+             "locate": cmd_locate, "check_cmd": cmd_check_cmd,
              "patch": cmd_patch, "repomap": cmd_repomap}
     table[args.cmd](args)
 

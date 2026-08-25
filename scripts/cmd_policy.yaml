@@ -1,0 +1,55 @@
+# cmd_policy.yaml — dangerous-command interception rules (v1.9.0)
+# Ported from two upstream engines:
+#   - Codex CLI execpolicy: three-state prefix table (allow/forbidden/prompt),
+#     first-token keyed, token-wise prefix match with alternatives
+#   - Gemini CLI: quote-aware command-substitution detection + per-segment checks
+# Format: each rule = { pattern: [tokens...], decision: allow|deny|confirm,
+#                       reason: str }
+# Matching: longest-prefix-wins; unmatched commands → default_confirm.
+
+default_decision: confirm   # anything not matched → ask the user (fail-closed)
+
+rules:
+  # ---- L0-style read-only allowlist (Gemini safe set + Codex Allow) ----
+  - {pattern: [ls],            decision: allow}
+  - {pattern: [cat],           decision: allow}
+  - {pattern: [head],          decision: allow}
+  - {pattern: [tail],          decision: allow}
+  - {pattern: [grep],          decision: allow}
+  - {pattern: [find],          decision: allow}
+  - {pattern: [pwd],           decision: allow}
+  - {pattern: [echo],          decision: allow}
+  - {pattern: [which],         decision: allow}
+  - {pattern: [wc],            decision: allow}
+  - {pattern: [diff],          decision: allow}
+  - {pattern: [git, status],   decision: allow}
+  - {pattern: [git, diff],     decision: allow}
+  - {pattern: [git, log],      decision: allow}
+  - {pattern: [git, show],     decision: allow}
+  - {pattern: [git, branch],   decision: allow}
+
+  # ---- forbidden (Codex Forbidden / never-auto set) ----
+  - {pattern: [rm],            decision: deny, reason: recursive or force delete of data}
+  - {pattern: [git, reset, --hard], decision: deny, reason: destructive history rewrite (Codex example policy)}
+  - {pattern: [git, push, --force], decision: deny, reason: force push}
+  - {pattern: [git, push, -f], decision: deny, reason: force push}
+  - {pattern: [dd],            decision: deny, reason: raw disk write}
+  - {pattern: [mkfs],          decision: deny, reason: filesystem format}
+  - {pattern: [shutdown],      decision: deny, reason: system power control}
+  - {pattern: [reboot],        decision: deny, reason: system power control}
+  - {pattern: [chmod, "777"],  decision: deny, reason: world-writable permissions}
+
+  # ---- prompt/confirm (Codex Prompt tier) ----
+  - {pattern: [git, push],     decision: confirm, reason: publishes to remote}
+  - {pattern: [git, commit],   decision: confirm, reason: records history}
+  - {pattern: [git, checkout], decision: confirm, reason: may discard local changes}
+  - {pattern: [git, clean],    decision: confirm, reason: deletes untracked files}
+  - {pattern: [pip, install],  decision: confirm, reason: installs software}
+  - {pattern: [npm, install],  decision: confirm, reason: installs software}
+  - {pattern: [uv, pip, install], decision: confirm, reason: installs software}
+  - {pattern: [curl],          decision: confirm, reason: network fetch}
+  - {pattern: [wget],          decision: confirm, reason: network fetch}
+  - {pattern: [ssh],           decision: confirm, reason: remote execution}
+  - {pattern: [docker],        decision: confirm, reason: container lifecycle}
+  - {pattern: [mv],            decision: confirm, reason: moves or overwrites files}
+  - {pattern: [cp],            decision: confirm, reason: copies or overwrites files}

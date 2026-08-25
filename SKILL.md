@@ -205,6 +205,23 @@ One table, four tiers — check it BEFORE any action. L2/L3 use `clarify` as the
 
 Enforcement reality (honest label): the table is prompt-level knowledge — nothing forces the model to consult it before every act. Post-hoc audit and the user watching L2/L3 clarify prompts are the backstops. Destructive ops need explicit user confirm in EVERY mode, including full-auto.
 
+## Dangerous-command interception (Codex execpolicy × Gemini substitution scan, goal-dangerous-cmd-intercept-v2)
+
+Before running ANY terminal command (L1 and above), run the deterministic engine:
+
+```bash
+python scripts/hca_gate.py check_cmd "<full command line>"
+```
+
+Exit codes: `0` ALLOW → run it · `1` DENY → do NOT run, propose a safer alternative · `3` CONFIRM → show the FULL original command to the user via clarify and act only on approval.
+
+What the engine does (ported verbatim from upstream source):
+- **Three-state prefix table** (`scripts/cmd_policy.yaml`, Codex Decision semantics) — longest-prefix-wins; unmatched commands fail CLOSED to confirm
+- **Per-segment checks** — compound commands (`&&`/`;`/`|`) are split and EACH segment judged independently (both engines); one bad segment denies the whole line
+- **Quote-aware injection scan** (Gemini `detectCommandSubstitution`) — `$()`, backticks, `<()`/`>()` process substitution anywhere → at best CONFIRM, even inside an allowlisted verb; quoted `$()` inside single quotes is correctly ignored
+
+The engine is deterministic Python — same verdict as the upstream engines for any input. The only soft link is that the model must invoke it first; post-hoc audit catches skips.
+
 ## Optional upstream plan (omh / AGENTS.md / other)
 
 If the conversation already contains a structured plan (from omh, a written AGENTS.md, or any planner), **consume it as step 2's input** — do not re-plan. If none exists, the mini-plan above suffices. The skill never requires a planner to function.

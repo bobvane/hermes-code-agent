@@ -403,5 +403,28 @@ check("locate strips diff markers from probe",
       r.returncode == 0, r.stdout[:200])
 shutil.rmtree(d)
 
+# --- ⑨ check_cmd: Codex execpolicy x Gemini substitution scan ---
+d = Path(tempfile.mkdtemp(prefix="hca_cmd_"))
+def cc(cmd):
+    return subprocess.run([sys.executable, GATE, "check_cmd", cmd],
+                          capture_output=True, text=True, cwd=d)
+r = cc("git status")
+check("check_cmd allows read-only git status", r.returncode == 0)
+r = cc("git reset --hard HEAD~1")
+check("check_cmd denies reset --hard", r.returncode == 1 and "DENY" in r.stdout)
+r = cc("git log && rm -rf /tmp/x")
+check("check_cmd compound: safe && dangerous → deny",
+      r.returncode == 1 and "rm" in r.stdout)
+r = cc("echo $(cat /etc/passwd)")
+check("check_cmd substitution in allowed verb → confirm",
+      r.returncode == 3 and "substitution" in r.stdout)
+r = cc("terraform apply")
+check("check_cmd unmatched command → default confirm (fail-closed)",
+      r.returncode == 3)
+r = cc("grep '$(not real)' file.txt")
+check("check_cmd quoted $() not flagged (quote-aware)",
+      r.returncode == 0, r.stdout[:150])
+shutil.rmtree(d)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
