@@ -7,3 +7,6 @@
 *.local
 .env
 __pycache__/
+
+# local build notes (not for GitHub)
+hermes-code-agent.md
