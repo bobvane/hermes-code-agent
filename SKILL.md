@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 2.1.0
+version: 2.1.1
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -36,6 +36,7 @@ Every implementation task goes through this. The agent must NOT report "done" un
 ```text
 1. CLARIFY SCOPE   — what file(s)/behavior change? what does "done" mean (test? lint? run)?
                       Detect the test/lint/build command from repo signals (see Zero-config section) before asking; only ask if undetectable.
+                      **`python scripts/hca_gate.py update-check --force`** (once per day) to detect a newer release; suppresses if none or throttled.
 2. PLAN (separate mode) — switch to PLAN cognition: explore, read relevant files, decide approach.
                       Output a 3-5 step mini-plan. Do NOT edit code in this step.
                       (If an upstream plan exists, consume it and skip to step 3.)
@@ -43,6 +44,9 @@ Every implementation task goes through this. The agent must NOT report "done" un
 4. VERIFY          — run the project's test/lint/build. Capture real output.
 5. LOOP ON RED     — if red, feed the EXACT error back, fix, re-run. Max 5 red→fix cycles per step.
 6. GATE            — only when ALL checks green AND scope met → mark step done.
+                      Run `python scripts/hca_gate.py update-pending`. If non-empty, clarify:
+                      `"检测到新版本 vX.Y.Z（本地 vA.B.C），A. 升级 Skill  B. 不升级（3 天后再提示）"`
+                      选 A → 自动执行 `python scripts/hca_gate.py update-apply`，完成后提示「已升级到 vX.Y.Z，重启 Hermes 网关后生效。」；选 B → 写 next_prompt_ts=now+3d，本轮静默。
 7. REPEAT for next step. Then report: what changed, what's green, what's untested.
 ```
 
@@ -135,12 +139,36 @@ Both present → silent pass, zero interruption; only missing pieces trigger que
 - Destructive ops (push, rm -rf, drop, force flags) always need explicit user confirm (see Approval modes).
 
 **Auto-detect project commands（自动探测命令，不依赖手写配置）** — in CLARIFY/VERIFY, detect the test/lint/build command from repo signals before asking:
+
 - Python: `pytest` / `python -m pytest` (look for `pyproject.toml`, `pytest.ini`, `tests/`); lint `ruff`/`flake8` if present.
 - Node: `npm test` / `npm run lint` / `npm run build` (read `package.json` scripts).
 - Go: `go test ./...` / `go vet ./...`.
 - Rust: `cargo test` / `cargo clippy`.
 - Has a `Makefile`? prefer `make test` / `make lint` / `make build`.
 - If detection is ambiguous or the user stated a command, use that. Only ask in CLARIFY if truly undetectable.
+
+## Self-update check (v2.1.1) / 自检升级
+
+The skill checks its own GitHub release (`bobvane/hermes-code-agent`) without blocking the coding task. Two throttle pointers live in `<skill_root>/skill_state.json` (NOT inside the project's `.hca_state.json`):
+
+| Pointer | Value | Behavior |
+|---|---|---|
+| `last_check_ts` | epoch timestamp of last successful network check | a new check is skipped until 72h after this; `--force` bypasses |
+| `next_prompt_ts` | epoch when the prompt re-arms (set when the user picks **B**) | prompts suppressed until now + 3 days |
+
+Flow the model MUST follow:
+
+1. **CLARIFY stage** — run `python scripts/hca_gate.py update-check --force`. The gate writes `last_check_ts`. Silent degrade on network failure (never block the coding task).
+2. **GATE stage** (after ALL checks green) — run `python scripts/hca_gate.py update-pending`.
+   - Empty output (`"update: none pending"`) → do nothing, continue as usual.
+   - Non-empty output (`"PENDING local=X remote=Y"`) → `clarify("检测到新版本 vY（本地 vX），A. 升级 Skill  B. 不升级（3 天后再提示）", choices=["A. 升级 Skill", "B. 不升级"])`.
+     - User picks A → `python scripts/hca_gate.py update-apply` (downloads tarball, backs up old SKILL.md, overwrites skill directory; `skill_state.json` is exempt and survives). Then tell the user: "已升级到 vY，重启 Hermes 网关后生效。"
+     - User picks B → set `next_prompt_ts = now + 3 days` in `skill_state.json` manually (the skill must call `update-apply` with no `--version` after 3 days pass, which the cooldown already prevents). **Important**: do NOT re-run `update-check` immediately after B; let the 72h throttle handle the next network call.
+3. The gate subcommands are **L1** (per the approval tiers table): execute them without asking, but log their output honestly.
+
+Throttle defaults: `UPDATE_CHECK_HOURS=72` (3 days), `UPGRADE_PROMPT_DAYS=3` (same value keeps them in sync), `UPDATE_HTTP_TIMEOUT=5` (short, never stall the task).
+
+Debug: `python scripts/hca_gate.py update-status` prints both pointers and pending info so you can verify the throttling logic.
 
 **Rules file is optional override** — the two-layer conventions above (global CONVENTIONS.md + per-project `<项目名>.md`) add project-specific overrides on top of the built-in defaults. If neither exists, the skill runs identically (auto-detect + built-in safety).
 

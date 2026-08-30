@@ -18,6 +18,11 @@ Subcommands:
     apply < patch.diff  Codex apply-patch port: seek_sequence 4-level match,
                         atomic per-file write, structured errors on failure
 
+    update-check        Check GitHub for newer release (throttled 72h by default)
+    update-pending      Non-empty output = there is a pending upgrade to offer
+    update-status       Show version, throttle pointers, pending info
+    update-apply [--version TAG]  Download & overwrite skill; skill_state.json exempt
+
 Exit codes: 0 green · 1 red/blocked · 2 doom stop
 
 Stdlib only. No third-party dependencies. Python 3.8+.
@@ -28,8 +33,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
+import urllib.request
 from pathlib import Path
 
 STATE_FILE = ".hca_state.json"
@@ -1318,6 +1327,218 @@ def cmd_check_cmd(args):
     ok("command cleared by policy")
 
 
+# ------------------------------------------------------------------ update
+
+# Self-update check (v2.1.1). The skill checks its own GitHub repo for a
+# newer release. Two throttle pointers in skill_state.json (lives NEXT to
+# SKILL.md, not inside a project):
+#   last_check_ts  — last real network check; a successful check re-arms only
+#                    after UPDATE_CHECK_HOURS (72h). --force bypasses.
+#   next_prompt_ts — after the user chose "B. 不升级", prompts are suppressed
+#                    until now + UPGRADE_PROMPT_DAYS (3 days).
+# Network failure degrades silently: the coding task must never be blocked by
+# an update check.
+
+GITHUB_REPO = "bobvane/hermes-code-agent"
+GITHUB_API_RELEASES = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+GITHUB_TARBALL = f"https://github.com/{GITHUB_REPO}/archive/refs/tags/v{{v}}.tar.gz"
+UPDATE_CHECK_HOURS = 72          # 3 天检测节流
+UPGRADE_PROMPT_DAYS = 3          # 选 B 后 3 天再提示
+UPDATE_HTTP_TIMEOUT = 5          # curl-like --max-time 5
+EXEMPT_FILES = {"skill_state.json"}
+
+
+def skill_root():
+    """Skill directory = hca_gate.py 的上级的上级 (scripts/ -> skill root)."""
+    return Path(__file__).resolve().parent.parent
+
+
+def skill_state_path():
+    return skill_root() / "skill_state.json"
+
+
+def read_skill_state():
+    p = skill_state_path()
+    if p.exists():
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {"last_check_ts": 0, "next_prompt_ts": 0, "pending": None}
+
+
+def write_skill_state(st):
+    skill_state_path().write_text(
+        json.dumps(st, ensure_ascii=False, indent=1), encoding="utf-8"
+    )
+
+
+def local_skill_version():
+    """Read `version:` from the SKILL.md next to this script."""
+    p = skill_root() / "SKILL.md"
+    if not p.exists():
+        return "0.0.0"
+    m = re.search(r"^version:\s*([0-9][0-9a-zA-Z.\-]*)", p.read_text(encoding="utf-8"),
+                  re.MULTILINE)
+    return m.group(1).strip() if m else "0.0.0"
+
+
+def parse_version(v):
+    """'v2.1.1' / '2.10.0' -> tuple for numeric comparison."""
+    s = (v or "").strip().lstrip("v")
+    parts = []
+    for seg in s.split("."):
+        digits = "".join(ch for ch in seg if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def fetch_latest_release():
+    """Return the newest release tag (e.g. 'v2.1.1') or None on failure."""
+    req = urllib.request.Request(GITHUB_API_RELEASES,
+                                 headers={"User-Agent": "hermes-code-agent",
+                                          "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(req, timeout=UPDATE_HTTP_TIMEOUT) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        return data.get("tag_name")
+    except Exception:
+        return None
+
+
+def cmd_update_check(args):
+    st = read_skill_state()
+    now = time.time()
+    if not args.force and st.get("last_check_ts", 0) and \
+            now - st["last_check_ts"] < UPDATE_CHECK_HOURS * 3600:
+        print("[HCA-GATE] update: skipped (throttled " +
+              f"{UPDATE_CHECK_HOURS}h since last check)")
+        sys.exit(0)
+
+    local = local_skill_version()
+    remote = fetch_latest_release()
+
+    if remote is None:
+        # network failure / rate limit -> silent degrade, never block
+        print("[HCA-GATE] update: check failed (network), skipping")
+        sys.exit(0)
+
+    remote_clean = remote.lstrip("v")
+    st["last_check_ts"] = now
+    write_skill_state(st)
+
+    if parse_version(remote_clean) > parse_version(local):
+        st["pending"] = {"remote": remote_clean, "checked_at": now,
+                         "local": local}
+        write_skill_state(st)
+        print(f"[HCA-GATE] UPDATE_AVAILABLE local={local} remote={remote_clean}")
+    else:
+        st["pending"] = None
+        write_skill_state(st)
+        print(f"[HCA-GATE] update: up-to-date ({local})")
+    sys.exit(0)
+
+
+def cmd_update_pending(_args):
+    """Called after GATE: non-empty output means 'offer the upgrade now'."""
+    st = read_skill_state()
+    pending = st.get("pending")
+    if pending:
+        now = time.time()
+        if now >= st.get("next_prompt_ts", 0):
+            local_v = pending.get("local", "unknown")
+            remote_v = pending.get("remote", "unknown")
+            print(f"[HCA-GATE] PENDING local={local_v} remote={remote_v}")
+            sys.exit(0)
+    print("[HCA-GATE] update: none pending")
+    sys.exit(0)
+
+
+def cmd_update_status(_args):
+    st = read_skill_state()
+    print(f"version:        {local_skill_version()}")
+    lct = st.get("last_check_ts", 0)
+    print(f"last_check_ts:  {lct} ({time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(lct)) if lct else 'never'})")
+    npt = st.get("next_prompt_ts", 0)
+    print(f"next_prompt_ts: {npt} ({time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(npt)) if npt else 'no cooldown'})")
+    print(f"pending:        {st.get('pending')}")
+    print(f"check_interval: {UPDATE_CHECK_HOURS}h · prompt_cooldown: {UPGRADE_PROMPT_DAYS}d")
+    print(f"skill_path:     {skill_root()}")
+    sys.exit(0)
+
+
+def cmd_update_apply(args):
+    """Download the pending (or --version) release, back up, overwrite.
+    skill_state.json is exempt: throttle pointers survive the upgrade."""
+    st = read_skill_state()
+    if args.version:
+        remote = args.version.lstrip("v")
+    elif st.get("pending") and st["pending"].get("remote"):
+        remote = st["pending"]["remote"]
+    else:
+        print("[HCA-GATE] update: nothing to apply (run update-check first)")
+        sys.exit(1)
+
+    root = skill_root()
+    url = GITHUB_TARBALL.format(v=remote)
+    print(f"[HCA-GATE] update: downloading v{remote} ...")
+    data: bytes = b""
+    try:
+        with urllib.request.urlopen(url, timeout=UPDATE_HTTP_TIMEOUT) as r:
+            data = r.read()
+    except Exception as e:
+        fail(f"update: download failed: {e}")
+    if not data:
+        fail("update: download returned no bytes")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tarball = Path(tmp) / "release.tar.gz"
+        tarball.write_bytes(data)
+        extract_dir = Path(tmp) / "x"
+        extract_dir.mkdir()
+        import tarfile
+        with tarfile.open(tarball, "r:gz") as tf:
+            tf.extractall(extract_dir)
+        # archive contains a single top dir: hermes-code-agent-<version>/
+        src_root = next(extract_dir.iterdir())
+
+        # validate: SKILL.md version must equal the target
+        src_skill = src_root / "SKILL.md"
+        m = re.search(r"^version:\s*([0-9][0-9a-zA-Z.\-]*)",
+                      src_skill.read_text(encoding="utf-8"), re.MULTILINE)
+        got = m.group(1).strip() if m else ""
+        if got.lstrip("v") != remote.lstrip("v"):
+            fail(f"update: tarball version mismatch (wanted {remote}, got {got})")
+
+        # backup SKILL.md (rollback rail) then copy tree, exempting state
+        backups = root / "backups"
+        backups.mkdir(exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        if (root / "SKILL.md").exists():
+            shutil.copy2(root / "SKILL.md", backups / f"SKILL.md.bak-{stamp}")
+
+        for item in src_root.iterdir():
+            if item.name in EXEMPT_FILES:
+                continue
+            dst = root / item.name
+            if dst.exists():
+                if dst.is_dir():
+                    shutil.rmtree(dst)
+                else:
+                    dst.unlink()
+            shutil.move(str(item), str(dst))
+
+        # refresh state: bump version, clear pending, no prompt cooldown reset
+        st["local"] = remote
+        st["pending"] = None
+        st["last_check_ts"] = time.time()
+        write_skill_state(st)
+
+    print(f"[HCA-GATE] UPDATED to v{remote} — restart the Hermes gateway "
+          "(/model or restart) to load the new skill.")
+    sys.exit(0)
+
+
 def main():
     ap = argparse.ArgumentParser(prog="hca_gate.py",
                                  description=__doc__,
@@ -1368,6 +1589,23 @@ def main():
     ap_.add_argument("patch_file", nargs="?", default=None,
                      help="patch file (default: stdin)")
 
+    # --- self-update subcommands (v2.1.1)
+    u = sub.add_parser("update-check",
+                       help="check GitHub for newer release (throttled)")
+    u.add_argument("--force", action="store_true",
+                   help="bypass 72h throttle and force a network check")
+
+    sub.add_parser("update-pending",
+                   help="non-empty output = there is a pending upgrade to offer")
+
+    sub.add_parser("update-status",
+                   help="show version, throttle pointers, pending info")
+
+    ua = sub.add_parser("update-apply",
+                        help="download & overwrite skill from pending or --version")
+    ua.add_argument("--version",
+                    help="override pending; apply this tag (strip v prefix)")
+
     args = ap.parse_args()
     table = {"detect": cmd_detect, "snapshot": cmd_snapshot,
              "restore": cmd_restore, "compact": cmd_compact,
@@ -1375,7 +1613,11 @@ def main():
              "state": cmd_state, "plancheck": cmd_plancheck,
              "doomcheck": cmd_doomcheck,
              "locate": cmd_locate, "check_cmd": cmd_check_cmd,
-             "patch": cmd_patch, "repomap": cmd_repomap, "apply": cmd_apply}
+             "patch": cmd_patch, "repomap": cmd_repomap, "apply": cmd_apply,
+             "update-check": cmd_update_check,
+             "update-pending": cmd_update_pending,
+             "update-status": cmd_update_status,
+             "update-apply": cmd_update_apply}
     table[args.cmd](args)
 
 

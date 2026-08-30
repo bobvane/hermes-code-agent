@@ -10,3 +10,7 @@ __pycache__/
 
 # local build notes (not for GitHub)
 hermes-code-agent.md
+
+# skill-level throttle state (lives next to SKILL.md, not tracked here)
+skills/hermes-code-agent/skill_state.json
+skills/*/skill_state.json
