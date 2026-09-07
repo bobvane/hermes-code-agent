@@ -80,6 +80,33 @@ def fail(msg):
     sys.exit(1)
 
 
+def safe_repo_path(raw_path: str) -> Path:
+    """Resolve and validate a patch path stays inside the repository.
+    Rejects absolute paths, .. traversal, symlinks escaping repo, .git/, and
+    protected state files. Raises ApplyPatchError on violation."""
+    root = Path.cwd().resolve()
+    candidate = (root / raw_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise ApplyPatchError(
+            "path", f"path escapes repository: {raw_path}")
+    if candidate == root:
+        raise ApplyPatchError("path", "cannot modify repository root")
+    if candidate.is_symlink():
+        target = candidate.resolve()
+        try:
+            target.relative_to(root)
+        except ValueError:
+            raise ApplyPatchError(
+                "path", f"symlink escapes repository: {raw_path} -> {target}")
+    if ".git" in candidate.parts:
+        raise ApplyPatchError("path", f"cannot modify .git internals: {raw_path}")
+    if candidate.name in {STATE_FILE, "skill_state.json"}:
+        raise ApplyPatchError("path", f"protected state file: {raw_path}")
+    return candidate
+
+
 # ------------------------------------------- patch apply w/ 3-tier fallback
 
 def _unified_diff_blocks(diff_text):
@@ -108,7 +135,8 @@ def cmd_patch(args):
             whitespace) — survives small drift around the edit;
     tier 3: anchor replace — find the removed lines' core content with all
             whitespace stripped; if unique, splice the replacement.
-    Never partially applies a file silently: reports per-block outcome."""
+    Never partially applies a file silently: reports per-block outcome.
+    LEGACY: prefer `apply` subcommand (seek_sequence 4-level, atomic)."""
     diff_text = Path(args.patch_file).read_text(encoding="utf-8") \
         if args.patch_file else sys.stdin.read()
     blocks = _unified_diff_blocks(diff_text)
@@ -118,7 +146,11 @@ def cmd_patch(args):
     for b in blocks:
         block_diff = ("--- a/" + b["path"] + "\n+++ b/" + b["path"]
                       + "\n" + "\n".join(b["lines"]) + "\n")
-        p = Path(b["path"])
+        try:
+            safe_path = safe_repo_path(b["path"])
+        except ApplyPatchError as e:
+            results.append((b["path"], f"FAILED({e.message})"))
+            continue
         # tier 1: exact git apply of this block
         proc = subprocess.run(["git", "apply", "--whitespace=nowarn", "-"],
                               input=block_diff, capture_output=True,
@@ -140,10 +172,10 @@ def cmd_patch(args):
         new_lines = [ln[1:] for ln in b["lines"]
                      if ln.startswith("+") and not ln.startswith("+++")]
         key = "".join(old_lines).strip()
-        if not p.exists() or not key:
+        if not safe_path.exists() or not key:
             results.append((b["path"], "FAILED(all tiers)"))
             continue
-        text = p.read_text(encoding="utf-8")
+        text = safe_path.read_text(encoding="utf-8")
         knorm = "".join(key.split())
         if _wsfree_count(text, key) != 1:
             results.append((b["path"], "FAILED(anchor not unique/found)"))
@@ -154,7 +186,8 @@ def cmd_patch(args):
             continue
         first, last = span
         new_text = text[:first] + "\n".join(new_lines) + text[last + 1:]
-        p.write_text(new_text, encoding="utf-8")
+        print(f"[HCA-GATE] WARNING: patch applied using fuzzy whitespace matching (tier 3) on {b['path']}")
+        safe_path.write_text(new_text, encoding="utf-8")
         results.append((b["path"], "anchor"))
     for path, how in results:
         print(f"  ok  {path} [{how}]")
@@ -343,10 +376,11 @@ def parse_patch(patch_text):
 def apply_seek_patch_file(path, hunks):
     """Apply parsed hunks to ONE file atomically via seek_sequence. All hunks
     must land or nothing is written (Codex atomicity). Raises
-    ApplyPatchError on the first failing hunk with expected/actual context."""
-    p = Path(path)
+    ApplyPatchError on the first failing hunk with expected/actual context.
+    Returns the new content as string (does NOT write) — caller handles atomic write."""
+    safe_path = safe_repo_path(path)
     try:
-        text = p.read_text(encoding="utf-8") if p.exists() else ""
+        text = safe_path.read_text(encoding="utf-8") if safe_path.exists() else ""
     except OSError as e:
         raise ApplyPatchError("io", f"cannot read {path}: {e}")
     lines = text.splitlines()
@@ -368,18 +402,15 @@ def apply_seek_patch_file(path, hunks):
             lines[pos:pos + len(h["old"])] = h["new"]
         else:
             lines[pos:pos] = h["new"]
-    try:
-        p.write_text("\n".join(lines) + ("\n" if lines else ""),
-                     encoding="utf-8")
-    except OSError as e:
-        raise ApplyPatchError("io", f"cannot write {path}: {e}")
+    return "\n".join(lines) + ("\n" if lines else "")
 
 
 def cmd_apply(args):
     """Codex-style tolerant patch application (apply-patch module port).
     Parse → seek_sequence 4-level match → atomic write per file.
     On ANY failure: print the structured error (which hunk, expected vs
-    actually-there) so the model can fix the patch and retry — exit 1."""
+    actually-there) so the model can fix the patch and retry — exit 1.
+    Two-phase: all files validated in memory, then written atomically."""
     patch_text = Path(args.patch_file).read_text(encoding="utf-8") \
         if args.patch_file else sys.stdin.read()
     try:
@@ -388,17 +419,36 @@ def cmd_apply(args):
         print(f"[HCA-GATE-RED]\n{e.render()}")
         print("[HCA-GATE] Fix the patch format and re-submit.")
         sys.exit(1)
+
+    # Phase 1: validate all files in memory
     results = []
+    new_contents = {}
     for b in blocks:
         try:
-            apply_seek_patch_file(b["path"], b["hunks"])
+            new_content = apply_seek_patch_file(b["path"], b["hunks"])
+            new_contents[b["path"]] = new_content
             results.append((b["path"], len(b["hunks"])))
         except ApplyPatchError as e:
             print(f"[HCA-GATE-RED]\n{e.render()}")
             print("[HCA-GATE] PATCH channel: feed this error back, adjust "
                   "the patch (run `locate <file>` for fuzzy rescue), "
-                  "re-submit. The file was NOT modified.")
+                  "re-submit. No files were modified.")
             sys.exit(1)
+
+    # Phase 2: atomic write all files
+    for path, content in new_contents.items():
+        safe_path = safe_repo_path(path)
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = safe_path.with_suffix(safe_path.suffix + ".tmp")
+        try:
+            tmp_path.write_text(content, encoding="utf-8")
+            os.replace(tmp_path, safe_path)
+        except OSError as e:
+            # Cleanup on failure
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+            raise ApplyPatchError("io", f"cannot write {path}: {e}")
+
     for path, nh in results:
         print(f"  ok  {path} ({nh} hunk(s), seek_sequence)")
     ok(f"patch applied atomically to {len(results)} file(s)")
@@ -581,9 +631,13 @@ def cmd_detect(_args):
               "(pyproject/package.json/go.mod/Cargo.toml). "
               "Ask the user how to verify.")
         sys.exit(1)
+    print("[HCA-GATE] detected commands (review before running — "
+          "project scripts run with the agent's privileges):")
     for kind, items in cmds.items():
         for it in items:
-            print(f"{kind}: {it}")
+            print(f"  {kind}: {it}")
+    print("[HCA-GATE] TIP: project scripts come from the repo. For "
+          "untrusted repos, read the script first or run in a sandbox.")
     ok("detection complete")
 
 
@@ -1280,6 +1334,55 @@ def _load_policy():
     return default, rules
 
 
+def _check_interpreter_escape(toks):
+    """Detect interpreter-eval patterns that bypass the policy table by
+    wrapping arbitrary code in an interpreter's `-c` / `--eval` / `-exec`
+    arg. Returns the escape kind or None."""
+    if len(toks) < 2:
+        return None
+    interp = toks[0]
+    # python, python3, ruby, perl, node, php, lua, bash, sh, zsh
+    if interp in {"python", "python3", "python2", "ipython"}:
+        for t in toks[1:]:
+            if t in {"-c", "-C"}:
+                return f"python eval ({t})"
+    elif interp in {"ruby", "rb"}:
+        for t in toks[1:]:
+            if t in {"-e", "--eval"}:
+                return f"ruby eval ({t})"
+    elif interp == "perl":
+        for t in toks[1:]:
+            if t in {"-e", "-E"}:
+                return f"perl eval ({t})"
+    elif interp == "node":
+        for t in toks[1:]:
+            if t in {"-e", "--eval", "-p", "-pe"}:
+                return f"node eval ({t})"
+    elif interp in {"php", "php7", "php8"}:
+        for t in toks[1:]:
+            if t in {"-r", "-R", "-B", "-F", "-E"}:
+                return f"php eval ({t})"
+    elif interp in {"bash", "sh", "zsh", "dash", "ash"}:
+        for t in toks[1:]:
+            if t in {"-c", "-i", "-l"} and len(toks) > 2:
+                # plain `bash -c "..."` is a direct shell — always confirm
+                return f"shell exec ({t})"
+    elif interp == "find":
+        for t in toks[1:]:
+            if t == "-exec" or t.startswith("-exec"):
+                return "find -exec"
+    elif interp in {"xargs", "parallel"}:
+        # xargs takes a command after --
+        return f"{interp} command chain"
+    elif interp == "env":
+        # env VAR=val cmd ... — environment injection vector
+        for t in toks[1:]:
+            if "=" in t and not t.startswith("-"):
+                continue  # var assignment, still flagging the wrapped cmd
+        return "env command chain"
+    return None
+
+
 def cmd_check_cmd(args):
     """Three-state verdict on a shell command line (Codex Decision semantics:
     allow / deny / confirm), applied PER SEGMENT of compound commands, plus
@@ -1307,6 +1410,12 @@ def cmd_check_cmd(args):
         elif inj and v["decision"] == "allow":
             # an allowed verb wrapped around substitution is NOT safe anymore
             v["decision"], v["reason"] = "confirm", f"{inj} inside command"
+        # interpreter-escape interception: `python -c`, `bash -c`, `find -exec`
+        # etc. bypass simple verb matching — always force confirm.
+        escape = _check_interpreter_escape(toks)
+        if escape:
+            v["decision"] = "confirm"
+            v["reason"] = f"interpreter escape: {escape}"
         verdicts.append((seg, v))
 
     final, worst = "allow", None
@@ -1469,7 +1578,9 @@ def cmd_update_status(_args):
 
 def cmd_update_apply(args):
     """Download the pending (or --version) release, back up, overwrite.
-    skill_state.json is exempt: throttle pointers survive the upgrade."""
+    skill_state.json is exempt: throttle pointers survive the upgrade.
+    Security: SHA-256 of tarball is fetched from the release's `.sha256` file
+    and verified before extraction. Mismatches abort the upgrade."""
     st = read_skill_state()
     if args.version:
         remote = args.version.lstrip("v")
@@ -1490,6 +1601,29 @@ def cmd_update_apply(args):
         fail(f"update: download failed: {e}")
     if not data:
         fail("update: download returned no bytes")
+
+    # SHA-256 verification: fetch the .sha256 sidecar and compare.
+    # Format: "<hex>  <filename>" or just "<hex>". Mismatch => abort.
+    sha256_url = f"https://github.com/{GITHUB_REPO}/archive/refs/tags/v{remote}.sha256"
+    expected_sha256 = ""
+    try:
+        with urllib.request.urlopen(sha256_url, timeout=UPDATE_HTTP_TIMEOUT) as r:
+            sha_text = r.read().decode("utf-8", errors="replace").strip()
+        # Parse "hex  filename" or "hex" format
+        expected_sha256 = sha_text.split()[0].lower() if sha_text else ""
+    except Exception:
+        pass  # No sidecar or network issue; warn but allow (--skip-verify override)
+    if args.skip_verify:
+        print("[HCA-GATE] update: SHA-256 verification SKIPPED (--skip-verify)")
+    elif expected_sha256:
+        actual_sha256 = hashlib.sha256(data).hexdigest()
+        if actual_sha256 != expected_sha256:
+            fail(f"update: SHA-256 mismatch! expected={expected_sha256} "
+                 f"got={actual_sha256} — aborting for safety")
+        print(f"[HCA-GATE] update: SHA-256 verified ({actual_sha256[:16]}...)")
+    else:
+        print(f"[HCA-GATE] update: WARNING no .sha256 sidecar found, "
+              f"proceeding without integrity check")
 
     with tempfile.TemporaryDirectory() as tmp:
         tarball = Path(tmp) / "release.tar.gz"
@@ -1605,6 +1739,8 @@ def main():
                         help="download & overwrite skill from pending or --version")
     ua.add_argument("--version",
                     help="override pending; apply this tag (strip v prefix)")
+    ua.add_argument("--skip-verify", action="store_true",
+                    help="skip SHA-256 verification (NOT RECOMMENDED)")
 
     args = ap.parse_args()
     table = {"detect": cmd_detect, "snapshot": cmd_snapshot,

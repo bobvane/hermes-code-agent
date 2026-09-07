@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 2.1.1
+version: 2.2.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -163,7 +163,7 @@ Flow the model MUST follow:
    - Empty output (`"update: none pending"`) → do nothing, continue as usual.
    - Non-empty output (`"PENDING local=X remote=Y"`) → `clarify("检测到新版本 vY（本地 vX），A. 升级 Skill  B. 不升级（3 天后再提示）", choices=["A. 升级 Skill", "B. 不升级"])`.
      - User picks A → `python scripts/hca_gate.py update-apply` (downloads tarball, backs up old SKILL.md, overwrites skill directory; `skill_state.json` is exempt and survives). Then tell the user: "已升级到 vY，重启 Hermes 网关后生效。"
-     - User picks B → set `next_prompt_ts = now + 3 days` in `skill_state.json` manually (the skill must call `update-apply` with no `--version` after 3 days pass, which the cooldown already prevents). **Important**: do NOT re-run `update-check` immediately after B; let the 72h throttle handle the next network call.
+     - User picks B → the gate subcommand `update-pending` returns empty on the next call (cooldown active); no action needed, the script manages `next_prompt_ts` automatically. **Do NOT call `update-apply` without `--version` after B** — the cooldown pointer prevents accidental re-prompting for 3 days.
 3. The gate subcommands are **L1** (per the approval tiers table): execute them without asking, but log their output honestly.
 
 Throttle defaults: `UPDATE_CHECK_HOURS=72` (3 days), `UPGRADE_PROMPT_DAYS=3` (same value keeps them in sync), `UPDATE_HTTP_TIMEOUT=5` (short, never stall the task).

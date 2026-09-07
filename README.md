@@ -48,6 +48,14 @@ Skill 自动探测 `pytest` / `npm test` / `go test` 等并运行，**无需把�
 - **不适用**：纯聊天、非代码任务；弱模型不担保效果（可能反复修不好）。
 - **与宿主关系**：上下文压缩 / 摘要等能力直接用 Hermes 宿主的，Skill 不重复实现。
 
+## 系统支持
+
+- **平台**：Linux / macOS 完整支持；Windows 为 best-effort（`start_new_session` + `os.killpg` 在 Windows 上行为不同）。
+- **依赖**：Python 3.8+（stdlib only，无第三方依赖），Git 必须（snapshot/restore/auto-commit 用到）。
+- **网络**：仅 `update-check` 子命令需要（5s 超时，失败静默降级，不阻塞主流程）。
+- **外部工具**：`pytest` / `npm` / `cargo` / `go` 等只是被探测和调用，不强制安装。
+- **无网络环境**：除 `update-check` / `update-apply` 外的所有子命令均可离线运行。
+
 ## 许可
 
 MIT —— 见 [LICENSE](LICENSE)。

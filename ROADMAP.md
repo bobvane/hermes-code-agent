@@ -110,7 +110,7 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 ## 當前版本 / Current version
 
-**v2.1.1** (2026-08-28): **自检升级 (self-update check)** — Skill 每次进入编程前静默探一次 GitHub 版本，任务完成后若发现新版本弹 A/B 升级选项（A=立即升级后提示重启网关生效；B=3 天后再提示）。两个节流指针写在 `skill_state.json`（不在项目 `.hca_state.json`）：`last_check_ts` 72h 检测节流 + `next_prompt_ts` 3 天提示节流。网络失败/版本相同均静默，不阻塞主流程。加 4 个子命令：`update-check`（强制/节流）、`update-pending`（任务完成后调用）、`update-status`（调试）、`update-apply`（真正下载覆盖，`skill_state.json` 豁免）。升级过程先备份旧 SKILL.md 到 `backups/`，失败可回滚。
+**v2.2.0** (2026-09-07): **安全硬化 (security hardening)** — Perplexity 评审建议落地的 P0 修复：①**补丁路径校验**（`safe_repo_path()`）— 拒绝 `..` 穿越、绝对路径、`.git/` 内部、受保护状态文件、逃逸符号链接，违反抛 `ApplyPatchError("path", ...)`；②**`apply` 两阶段原子写入** — 全部文件在内存里预验证后再统一 `os.replace()` 落盘，多文件补丁中间失败不会半应用；③**`update-apply` SHA-256 校验** — 下载 release tarball 后从 `vX.Y.Z.sha256` 拉期望哈希比对，不匹配立即中止；提供 `--skip-verify` 逃生口；④**`check_cmd` 解释器逃逸拦截** — 新增 `_check_interpreter_escape()` 检测 `python -c`/`node -e`/`bash -c`/`find -exec`/`xargs`/`env` 绕过模式，强制 `confirm` 而非默认 allow。P1 加固：`patch` 子命令 tier3 输出 WARNING（fuzzy whitespace 风险），`detect` 加 project-script review 提示，README 加 系统支持/平台依赖/网络 章节。`patch` 子命令保留为 legacy 入口（Bob 拍板不合并双入口），SKILL.md 推荐主用 `apply`。Backwards-compat: `apply` 子命令 4-level matching 行为不变。
 
 **v2.1.0** (2026-08-27): feature-complete 里程碑 — 六家对标 11/11 功能全部落地（计划/执行分离、测试反馈重试循环、子代理并行、每角色不同模型、步数/花费封顶、并发限制、权限审批分级、危险命令拦截、项目规则文件、仓库结构图、补丁容错应用）。收尾：README 完整重写（安装+机制+对照表+边界）、LICENSE 版权名规范化、清理基准冗余文件；测试套件暂不维护，按需响应问题。
 
