@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 2.2.0
+version: 2.3.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -55,7 +55,7 @@ planning and editing are distinct modes with distinct discipline — never plan 
 
 **Two mode scripts (Codex-style prompt-level split).** When you enter a mode, your behavior contract is EXACTLY that mode's text:
 
-- **PLAN mode discipline**: read, search, explore, decide. Output a 3–5 step mini-plan (files to touch, approach, done-criteria). FORBIDDEN in PLAN: `patch` / `write_file` / any source edit; running mutating commands. If an upstream plan exists, consume it and skip to the BUILD gate.
+- **PLAN mode discipline**: read, search, explore, decide. Output a 3–5 step mini-plan (files to touch, approach, done-criteria). FORBIDDEN in PLAN: `write_file` / any source edit; running mutating commands. If an upstream plan exists, consume it and skip to the BUILD gate.
 - **BUILD mode discipline**: touch as little as possible, one change per step, verify each step. No re-planning mid-build; if the plan proves wrong, exit back through the stage gate (below), never silently switch cognition.
 
 **Stage gate at every PLAN↔BUILD boundary (Cline-style user switch).** Do not cross a mode boundary on your own authority — ask:
@@ -77,11 +77,11 @@ after an edit, do NOT run tests blindly. Triage by failure type into three indep
 
 | Channel | Trigger | Action first | Budget |
 |---|---|---|---|
-| ① PATCH channel | `apply`/`patch` failed to land | structured error self-heal: the gate prints which hunk failed + expected-vs-actually-there → fix the patch and re-`apply`; for deep misses run `python scripts/hca_gate.py locate <file>` with the snippet | 3 tries |
+| ① PATCH channel | `apply` failed to land | structured error self-heal: the gate prints which hunk failed + expected-vs-actually-there → fix the patch and re-`apply`; for deep misses run `python scripts/hca_gate.py locate <file>` with the snippet | 3 tries |
 | ② STATIC channel | patch landed but syntax/lint errors | fix directly from the quickcheck/lint output (seconds-level fail-fast) | 3 tries |
 | ③ TEST channel | static clean, tests run and red | feed the exact verify digest back, fix, re-run | 5 red→fix cycles |
 
-**Preferred edit path (Codex parity):** emit unified-diff patches and land them with `python scripts/hca_gate.py apply <patch-or-stdin>`. The engine is the Codex apply-patch port: seek_sequence four-level matching (exact → rstrip → trim → Unicode-normalized, never skipping levels), atomic per-file writes (any hunk fails → nothing is written), and structured errors ([PARSE]/[MATCH]/[IO] + hunk index + expected/actual context) designed to be fed back for model self-healing. `patch` (git-apply 3-tier) remains as fallback; plain `write_file` only for new files or full rewrites.
+**Preferred edit path (Codex parity):** emit unified-diff patches and land them with `python scripts/hca_gate.py apply <patch-or-stdin>`. The engine is the Codex apply-patch port: seek_sequence four-level matching (exact → rstrip → trim → Unicode-normalized, never skipping levels), atomic per-file writes (all files validated in memory, then committed via `os.replace()` so a partial apply never leaves the tree half-modified — v2.2.0), and structured errors ([PARSE]/[MATCH]/[IO]/[PATH] + hunk index + expected/actual context) designed to be fed back for model self-healing. `apply` is the ONLY patch entry point as of v2.3.0; plain `write_file` only for new files or full rewrites.
 
 Rules: never jump to the test suite while ① or ② is failing; never re-patch while a test digest is the actual signal. Global ceiling still applies (see budget). Run the project's tests via `python scripts/hca_gate.py verify` — if red, feed the exact error back, fix, re-run. If the script is unavailable in this environment, run the project's tests manually and say so explicitly.
 
@@ -242,7 +242,7 @@ One table, four tiers — check it BEFORE any action. L2/L3 use `clarify` as the
 | Tier | Operations | Action |
 |---|---|---|
 | **L0 免审** (Cline auto-approve) | read_file / search_files / repomap; git status/diff/log; running tests/lint/build (read-only side effects) | do it, no ask |
-| **L1 常规** (Codex on-failure) | project-file edits via patch/write_file; quickcheck; snapshot/restore within repo; hca_gate commands | do it; report failures honestly |
+| **L1 常规** (Codex on-failure) | project-file edits via `apply`/write_file; quickcheck; snapshot/restore within repo; hca_gate commands | do it; report failures honestly |
 | **L2 审批** (Codex untrusted + Cline per-op confirm) | installing dependencies; writing outside the project dir; git commit/push/tag; network downloads (curl/wget/pip/npm install); creating cron jobs | `clarify` first, act only on approval |
 | **L3 红线** (both agents' never-auto set) | deleting data (`rm -rf`, drop, reset --hard); modifying system config; sending messages / publishing / releasing; touching secrets, keys, or restricted paths (~/.ssh/, ~/.aws/, *key*, *secret*); disabling safety rules | `clarify` with a recommended-reject default |
 

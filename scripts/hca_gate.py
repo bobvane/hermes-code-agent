@@ -107,135 +107,6 @@ def safe_repo_path(raw_path: str) -> Path:
     return candidate
 
 
-# ------------------------------------------- patch apply w/ 3-tier fallback
-
-def _unified_diff_blocks(diff_text):
-    """Split a multi-file unified diff into (path, hunks) blocks."""
-    import re as _re
-    blocks, cur = [], None
-    for line in diff_text.splitlines():
-        m = _re.match(r"\+\+\+ (?:b/)?(\S+)", line)
-        if m and not line.startswith("---"):
-            cur = {"path": m.group(1), "lines": []}
-            blocks.append(cur)
-            continue
-        if cur is not None:
-            if line.startswith(("--- ", "diff --git")) \
-                    and not line.startswith("--- \t"):
-                cur = None
-                continue
-            cur["lines"].append(line)
-    return [b for b in blocks if b["lines"]]
-
-
-def cmd_patch(args):
-    """Codex-style patch application with three-tier matching fallback:
-    tier 1: `git apply` (exact context);
-    tier 2: per-hunk apply with reduced context (`--unidiff-zero` + ignore
-            whitespace) — survives small drift around the edit;
-    tier 3: anchor replace — find the removed lines' core content with all
-            whitespace stripped; if unique, splice the replacement.
-    Never partially applies a file silently: reports per-block outcome.
-    LEGACY: prefer `apply` subcommand (seek_sequence 4-level, atomic)."""
-    diff_text = Path(args.patch_file).read_text(encoding="utf-8") \
-        if args.patch_file else sys.stdin.read()
-    blocks = _unified_diff_blocks(diff_text)
-    if not blocks:
-        fail("no parseable diff blocks")
-    results = []
-    for b in blocks:
-        block_diff = ("--- a/" + b["path"] + "\n+++ b/" + b["path"]
-                      + "\n" + "\n".join(b["lines"]) + "\n")
-        try:
-            safe_path = safe_repo_path(b["path"])
-        except ApplyPatchError as e:
-            results.append((b["path"], f"FAILED({e.message})"))
-            continue
-        # tier 1: exact git apply of this block
-        proc = subprocess.run(["git", "apply", "--whitespace=nowarn", "-"],
-                              input=block_diff, capture_output=True,
-                              text=True, timeout=60)
-        if proc.returncode == 0:
-            results.append((b["path"], "exact"))
-            continue
-        # tier 2: relaxed — ignore whitespace changes, allow zero context
-        proc = subprocess.run(
-            ["git", "apply", "--ignore-whitespace", "--unidiff-zero",
-             "--whitespace=nowarn", "-"],
-            input=block_diff, capture_output=True, text=True, timeout=60)
-        if proc.returncode == 0:
-            results.append((b["path"], "fuzzy(ws)"))
-            continue
-        # tier 3: anchor — strip ws from removed lines, require uniqueness
-        old_lines = [ln[1:] for ln in b["lines"]
-                     if ln.startswith("-") and not ln.startswith("---")]
-        new_lines = [ln[1:] for ln in b["lines"]
-                     if ln.startswith("+") and not ln.startswith("+++")]
-        key = "".join(old_lines).strip()
-        if not safe_path.exists() or not key:
-            results.append((b["path"], "FAILED(all tiers)"))
-            continue
-        text = safe_path.read_text(encoding="utf-8")
-        knorm = "".join(key.split())
-        if _wsfree_count(text, key) != 1:
-            results.append((b["path"], "FAILED(anchor not unique/found)"))
-            continue
-        span = _wsfree_span(text, key)   # (first_char_idx, last_char_idx)
-        if span is None:
-            results.append((b["path"], "FAILED(anchor walk)"))
-            continue
-        first, last = span
-        new_text = text[:first] + "\n".join(new_lines) + text[last + 1:]
-        print(f"[HCA-GATE] WARNING: patch applied using fuzzy whitespace matching (tier 3) on {b['path']}")
-        safe_path.write_text(new_text, encoding="utf-8")
-        results.append((b["path"], "anchor"))
-    for path, how in results:
-        print(f"  ok  {path} [{how}]")
-    bad = [r for r in results if r[1].startswith("FAILED")]
-    if bad:
-        fail(f"{len(bad)}/{len(results)} patch block(s) failed: "
-             + "; ".join(f"{p}: {h}" for p, h in bad))
-    ok(f"patch applied ({len(results)} block(s))")
-
-
-def _wsfree_count(text, key):
-    """Occurrences of `key` in `text` ignoring all whitespace on both sides."""
-    knorm = "".join(key.split())
-    if not knorm:
-        return 0
-    return sum(1 for _ in _wsfree_iter(text, knorm))
-
-
-def _wsfree_iter(text, knorm):
-    """Yield (start, end) spans where knorm matches ignoring whitespace."""
-    i, j, n, m = 0, 0, len(text), len(knorm)
-    start = None
-    while i < n:
-        ch = text[i]
-        if ch.isspace():
-            i += 1
-            continue
-        if j == 0:
-            start = i
-        if ch == knorm[j]:
-            j += 1
-            i += 1
-            if j == m:
-                yield (start, i - 1)
-                j, start = 0, None
-        else:
-            # mismatch: restart scan just after the candidate start char
-            i = start + 1
-            j, start = 0, None
-
-
-def _wsfree_span(text, key):
-    knorm = "".join(key.split())
-    for span in _wsfree_iter(text, knorm):
-        return span
-    return None
-
-
 # ------------------------------------------------- apply (Codex apply-patch port)
 # Verbatim port of Codex codex-rs/apply-patch: seek_sequence four-level
 # matching, defensive hunk parsing, structured errors, atomic application.
@@ -1690,9 +1561,6 @@ def main():
     c = sub.add_parser("compact", help="deterministic state compaction")
 
     q = sub.add_parser("quickcheck", help="fast per-file syntax gate")
-    pp = sub.add_parser("patch", help="apply unified diff (3-tier fallback)")
-    pp.add_argument("patch_file", nargs="?", default=None,
-                    help="diff file (default: stdin)")
     sub.add_parser("repomap", help="lightweight symbol-ranked repo map")
     q.add_argument("files", nargs="*", help="files to check (default: scan)")
 
@@ -1749,7 +1617,7 @@ def main():
              "state": cmd_state, "plancheck": cmd_plancheck,
              "doomcheck": cmd_doomcheck,
              "locate": cmd_locate, "check_cmd": cmd_check_cmd,
-             "patch": cmd_patch, "repomap": cmd_repomap, "apply": cmd_apply,
+             "repomap": cmd_repomap, "apply": cmd_apply,
              "update-check": cmd_update_check,
              "update-pending": cmd_update_pending,
              "update-status": cmd_update_status,

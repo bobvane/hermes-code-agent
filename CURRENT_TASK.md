@@ -1,37 +1,34 @@
 # Current Task
 
 ## 当前目标
-hermes-code-agent v2.2.0 安全硬化已完成交付，当前处于**稳定运行阶段**。
+hermes-code-agent v2.3.0 单一改码入口已完成（砍掉 `patch` 子命令），当前处于**稳定运行阶段**。
 
 ## 当前进度
 - [x] v2.1.0 feature-complete 里程碑（2026-08-27）
 - [x] v2.1.1 自检升级功能（2026-09-07）
 - [x] v2.2.0 安全硬化（2026-09-07）：
-  - [x] `safe_repo_path()` 路径校验（拒绝 `..` 穿越、绝对路径、`.git/`、受保护文件、逃逸符号链接）
-  - [x] `apply` 两阶段原子写入（内存预验证 + `os.replace()`）
-  - [x] `update-apply` SHA-256 校验（拉 `.sha256` sidecar 比对 + `--skip-verify` 逃生口）
-  - [x] `check_cmd` 解释器逃逸拦截（`python -c`/`node -e`/`bash -c`/`find -exec`/`xargs`/`env`）
-  - [x] `patch` tier3 输出 WARNING
-  - [x] `detect` 加 project-script review 提示
-  - [x] README 加「系统支持」章节（平台/依赖/网络/无网络环境）
+  - [x] `safe_repo_path()` 路径校验
+  - [x] `apply` 两阶段原子写入
+  - [x] `update-apply` SHA-256 校验
+  - [x] `check_cmd` 解释器逃逸拦截
+- [x] v2.3.0 单一改码入口（2026-09-07）：
+  - [x] 砍掉 `cmd_patch()` + `_unified_diff_blocks()` + `_wsfree_*` 共 130 行
+  - [x] 移除 argparse `patch` 注册 + dispatch table 条目
+  - [x] SKILL.md 全部 `patch` 引用替换为 `apply`
+  - [x] README 对照表更新
+  - [x] ROADMAP.md v2.3.0 + v2.2.0 条目
+  - [x] 版本号 2.2.0 → 2.3.0（SKILL.md）
+  - [x] Smoke test：syntax OK、apply 修改成功、`patch` 子命令清晰报错
 
 ## 当前正在处理
 无。等待 Bob 的新指令。
 
 ## 最近一次修改
-- **v2.2.0 commit**（2026-09-07）：security hardening
-  - hca_gate.py:
-    - 新增 `safe_repo_path()` 函数（路径校验）
-    - `apply_seek_patch_file` 改为只返回新内容，**不**直接写盘
-    - `cmd_apply` 改两阶段：内存预验证 → 统一 `os.replace()` 写入
-    - `cmd_patch` 加 `safe_repo_path` 校验，tier3 输出 WARNING
-    - 新增 `_check_interpreter_escape()` 函数
-    - `cmd_check_cmd` 集成解释器逃逸检测
-    - `cmd_update_apply` 加 SHA-256 sidecar 校验 + `--skip-verify` 参数
-    - `cmd_detect` 加 project-script review 提示
-  - README.md: 加「系统支持」章节
-  - SKILL.md: version 2.1.1 → 2.2.0
-  - ROADMAP.md: v2.2.0 条目
+- **v2.3.0 commit**（2026-09-07）：single edit entry point
+  - hca_gate.py: 删除 `cmd_patch()`/`_unified_diff_blocks()`/`_wsfree_count`/`_wsfree_iter`/`_wsfree_span`（约 130 行），删除 argparse `patch` 子命令注册，删除 dispatch table 的 `patch` 条目
+  - SKILL.md: PLAN 模式禁令去掉 `patch`，PATCH 通道 trigger 改为 `apply`，「Preferred edit path」段落重写（强调 v2.3.0 `apply` 是唯一入口），L1 审批表更新，version 2.2.0 → 2.3.0
+  - README.md: 对照表「补丁容错应用」改为「四级匹配 + 原子写入」
+  - ROADMAP.md: v2.3.0 条目 + 保留 v2.2.0
 
 ## 当前问题
 无阻塞性问题。
@@ -44,4 +41,4 @@ hermes-code-agent v2.2.0 安全硬化已完成交付，当前处于**稳定运�
 
 ---
 
-*最后更新：2026-09-07（v2.2.0 交付完成）*
+*最后更新：2026-09-07（v2.3.0 交付完成）*

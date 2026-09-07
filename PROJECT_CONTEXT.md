@@ -1,6 +1,6 @@
-# PROJECT_CONTEXT — hermes-code-agent v2.1.1
+# PROJECT_CONTEXT — hermes-code-agent v2.3.0
 
-> 本文档固化 hermes-code-agent Skill 的完整上下文，供任何 Hermes session 在不了解聊天记录的情况下继续开发。版本：v2.1.1（截至 2026-09-07）。
+> 本文档固化 hermes-code-agent Skill 的完整上下文，供任何 Hermes session 在不了解聊天记录的情况下继续开发。版本：v2.3.0（截至 2026-09-07）。
 
 ---
 
@@ -101,8 +101,8 @@ hermes-code-agent  ── orchestrates ──► existing dev skills (stage work
 | `quickcheck f.py` | 每次编辑后 | 秒级语法门（py_compile / tsc --noEmit / go build 等） |
 | `doomcheck "tag"` | 每轮循环 | 同 tag 连续 3 次 → exit 2 熔断 |
 | `locate f.py <<< snippet` | apply 失败时 | Aider 式模糊定位：最佳候选区+相似度分数（无硬阈值，判断权给模型） |
-| `apply <patch.diff>` | BUILD 编辑 | Codex seek_sequence 四级匹配：exact→rstrip→trim→Unicode-norm，单文件原子写入 |
-| `patch <diff>` | fallback | git-apply 三级降级（精确→ignore-whitespace→锚点替换） |
+| `apply <patch.diff>` | BUILD 编辑 | Codex seek_sequence 四级匹配（exact→rstrip→trim→Unicode-norm）+ 两阶段原子写入（v2.2.0+）+ `safe_repo_path()` 路径校验 |
+| ~~`patch <diff>`~~ | ~~fallback~~ | **v2.3.0 已砍除** —— 单一改码入口，用 `apply` |
 | `verify` | GATE | 跑全套测试/lint，exit 0/1/2 |
 | `state show/reset/bump` | 调试 | 看循环计数器（steps/redfix/doom/snapshots，存在 `.hca_state.json`） |
 | `repomap` | 任务开始 | 轻量仓库符号卡（grep class/def/function，top 40） |
@@ -155,14 +155,14 @@ EXEMPT_FILES = {"skill_state.json"}  # 升级时豁免覆盖
 
 | 通道 | 触发 | 先做什么 | 预算 |
 |---|---|---|---|
-| ① PATCH | apply/patch 失败 | 结构化错误自愈合；deep miss 用 locate | 3 次 |
+| ① PATCH | apply 失败 | 结构化错误自愈合；deep miss 用 locate | 3 次 |
 | ② STATIC | patch 落地但语法/lint 报错 | 直接从 quickcheck 输出修 | 3 次 |
 | ③ TEST | 静态清洁，测试 red | 喂 exact verify digest，修，重跑 | 5 红→修 |
 
 ### Plan/Build 边界（Cline-style user switch）
 - 每次 PLAN→BUILD 边界必须 `clarify("切换模式？", ["进入 BUILD", "留在 PLAN"])`
 - 边界前后必须跑 `plancheck`（exit!=0 → roll back 改动的文件）
-- PLAN mode 禁 edit（patch/write_file/mutating 命令）；BUILD mode 禁重规划
+- PLAN mode 禁 edit（write_file/mutating 命令）；BUILD mode 禁重规划
 
 ### 预算封顶（Codex TokenBudget）
 - 硬步数：5 步；TEST 通道 5 红→修；PATCH/STATIC 通道 3 次
@@ -178,7 +178,23 @@ EXEMPT_FILES = {"skill_state.json"}  # 升级时豁免覆盖
 
 ## 6. 已完成功能（按版本）
 
-### v2.1.1（2026-08-28，当前版本）— 自检升级
+### v2.3.0（2026-09-07，当前版本）— 单一改码入口
+- [x] 砍掉 `patch` 子命令（`cmd_patch` + `_unified_diff_blocks` + `_wsfree_*`，共 130 行）
+- [x] `apply` 成为唯一改码入口
+- [x] SKILL.md 全部 `patch` 引用替换为 `apply`
+- [x] README 对照表更新
+- [x] Breaking change：任何调用 `hca_gate.py patch <diff>` 的脚本需改为 `apply <diff>`
+- [x] Smoke test 通过：apply 修改成功、patch 子命令清晰报错
+
+### v2.2.0（2026-09-07）— 安全硬化
+- [x] `safe_repo_path()` 路径校验（拒绝 `..`/绝对路径/`.git`/受保护文件/逃逸符号链接）
+- [x] `apply` 两阶段原子写入（内存预验证 + `os.replace()`）
+- [x] `update-apply` SHA-256 校验（`.sha256` sidecar 比对 + `--skip-verify` 逃生口）
+- [x] `check_cmd` 解释器逃逸拦截（python -c / node -e / bash -c / find -exec / xargs / env）
+- [x] README 加「系统支持」章节
+- [x] GitHub Release v2.2.0
+
+### v2.1.1（2026-08-28）— 自检升级
 - [x] `update-check` 子命令：GitHub release 探新，72h 节流
 - [x] `update-pending` 子命令：GATE 后调，弹 A/B
 - [x] `update-apply` 子命令：tarball 下载 + 备份 + 覆盖（skill_state.json 豁免）

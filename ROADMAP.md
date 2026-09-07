@@ -110,6 +110,8 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 ## 當前版本 / Current version
 
+**v2.3.0** (2026-09-07): **单一改码入口 (single edit entry point)** — 砍掉 `patch` 子命令（git-apply 3-tier 老路径），`apply`（Codex seek_sequence 4-level + 原子写入）成为唯一改码入口。Bob 拍板"既然新版更安全就一步到位砍掉"。删除内容：`cmd_patch()` + `_unified_diff_blocks()` + `_wsfree_count/iter/span` 共约 130 行代码，argparse 注册、dispatch table 一并移除。SKILL.md 全部 `patch` 引用替换为 `apply` 或文本描述；README 对照表「补丁容错应用」更新为「四级匹配 + 原子写入」。验证：syntax check 通过、`apply` 单文件修改成功、调用 `patch` 子命令清晰报错「invalid choice」。**Breaking change**: 任何调用 `hca_gate.py patch <diff>` 的脚本需改为 `apply <diff>`。
+
 **v2.2.0** (2026-09-07): **安全硬化 (security hardening)** — Perplexity 评审建议落地的 P0 修复：①**补丁路径校验**（`safe_repo_path()`）— 拒绝 `..` 穿越、绝对路径、`.git/` 内部、受保护状态文件、逃逸符号链接，违反抛 `ApplyPatchError("path", ...)`；②**`apply` 两阶段原子写入** — 全部文件在内存里预验证后再统一 `os.replace()` 落盘，多文件补丁中间失败不会半应用；③**`update-apply` SHA-256 校验** — 下载 release tarball 后从 `vX.Y.Z.sha256` 拉期望哈希比对，不匹配立即中止；提供 `--skip-verify` 逃生口；④**`check_cmd` 解释器逃逸拦截** — 新增 `_check_interpreter_escape()` 检测 `python -c`/`node -e`/`bash -c`/`find -exec`/`xargs`/`env` 绕过模式，强制 `confirm` 而非默认 allow。P1 加固：`patch` 子命令 tier3 输出 WARNING（fuzzy whitespace 风险），`detect` 加 project-script review 提示，README 加 系统支持/平台依赖/网络 章节。`patch` 子命令保留为 legacy 入口（Bob 拍板不合并双入口），SKILL.md 推荐主用 `apply`。Backwards-compat: `apply` 子命令 4-level matching 行为不变。
 
 **v2.1.0** (2026-08-27): feature-complete 里程碑 — 六家对标 11/11 功能全部落地（计划/执行分离、测试反馈重试循环、子代理并行、每角色不同模型、步数/花费封顶、并发限制、权限审批分级、危险命令拦截、项目规则文件、仓库结构图、补丁容错应用）。收尾：README 完整重写（安装+机制+对照表+边界）、LICENSE 版权名规范化、清理基准冗余文件；测试套件暂不维护，按需响应问题。
