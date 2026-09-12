@@ -1,6 +1,6 @@
-# PROJECT_CONTEXT — hermes-code-agent v2.4.1
+# PROJECT_CONTEXT — hermes-code-agent v2.4.2
 
-> 本文档固化 hermes-code-agent Skill 的完整上下文，供任何 Hermes session 在不了解聊天记录的情况下继续开发。版本：v2.4.1（截至 2026-09-12）。
+> 本文档固化 hermes-code-agent Skill 的完整上下文，供任何 Hermes session 在不了解聊天记录的情况下继续开发。版本：v2.4.2（截至 2026-09-12）。
 
 ---
 
@@ -508,7 +508,8 @@ python scripts/hca_gate.py update-apply     # 需先有 pending
 | v2.3.0 | 2026-09-07 | 单一改码入口（砍 patch，apply 唯一） |
 | **v2.4.0** | **2026-09-12** | **可靠性版本（P0 数据丢失/密钥泄露修复 + 回归测试）** |
 | v2.4.1 | 2026-09-12 | 复审修复（find -delete / .GIT 大小写 / tar 过滤 / snooze 冷却 / SHA-256 资产） |
+| **v2.4.2** | **2026-09-12** | **复审补漏（snapshot 自动 git init 披露 / 升级提示带版本标题）** |
 
 ---
 
-*本文档由 hermes-code-agent Skill 自身生成，version: 2.4.1。任何修改请同步更新本文档顶部的版本声明。*
+*本文档由 hermes-code-agent Skill 自身生成，version: 2.4.2。任何修改请同步更新本文档顶部的版本声明。*

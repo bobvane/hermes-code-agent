@@ -1,7 +1,7 @@
 # Current Task
 
 ## 当前目标
-hermes-code-agent **v2.4.1** 已交付（v2.4.0 可靠性版本 + 第二轮复审修复）：不加任何新 Agent 功能，专修"文档宣称的确定性高于代码实际提供的确定性"。
+hermes-code-agent **v2.4.2** 已交付（v2.4.0 可靠性 + v2.4.1/v2.4.2 三轮外部复审收尾）：不加任何新 Agent 功能，专修"文档宣称的确定性高于代码实际提供的确定性"。
 
 ## 当前进度
 - [x] v2.1.x feature-complete + 自检升级
@@ -26,6 +26,10 @@ hermes-code-agent **v2.4.1** 已交付（v2.4.0 可靠性版本 + 第二轮复�
   - [x] 策略 mini-parser 无法解析的规则行输出 WARNING
   - [x] PROJECT_CONTEXT §7/§16/§17 版本残留清理
   - [x] 测试扩到 26 项（check_cmd 判定矩阵 / .GIT / snooze）
+- [x] **v2.4.2 复审补漏（2026-09-12）**：
+  - [x] `snapshot` 非 git 目录自动 `git init` 时输出披露（副作用隐式→显式）
+  - [x] `update-pending` 输出 release 标题（`PENDING ... | <title>`），选 A/B 前能看到改了什么
+  - [x] 测试 28 项
 
 ## 当前正在处理
 无。等待 Bob 的新指令。
@@ -49,13 +53,25 @@ hermes-code-agent **v2.4.1** 已交付（v2.4.0 可靠性版本 + 第二轮复�
 ## 当前问题
 无阻塞性问题。
 
-## 已知但未做（下一版候选）
+## 复审未采纳项（附理由，非遗漏）
+| 复审建议 | 为什么不做 |
+|---|---|
+| 拆分 `hca_gate.py` 为多模块 | 单文件 stdlib-only 是有意设计（零依赖、可整文件分发） |
+| `git clean -fdx` 改 deny | confirm 已要求用户逐条批准，符合"破坏性操作必须确认" |
+| `.hca_state.json` 加文件锁 | 单 agent 单会话设计，无并发场景 |
+| 硬编码阈值加配置文件覆盖 | 违反"安装一次零配置"的设计原则 |
+| `update-check` 加重试 | 设计上就是失败静默降级、不阻塞编码任务 |
+| 拆 5 个事实源文件（VERSION/FEATURES/CHANGELOG/...） | 个人项目过度工程；已做的是"文档漂移整肃" |
+| `sudo`/`chmod -R` 等加显式规则 | 实测已被 `default_decision: confirm` 的 fail-closed 覆盖 |
+
+## 已知未做（下一版候选）
 1. detect 置信度排序 + 候选 fallback
 2. `\ No newline at end of file` 语义（apply 当前忽略）
 3. 非 pytest 框架的 failure fingerprint（go/cargo/npm 不触发语义 doom）
 4. `run(cmd.split())` 带引号参数会切错
 5. quickcheck 只覆盖 .py/.ts/.tsx，且默认只扫 20 个文件
-6. `snapshot` 对非 git 目录会 `git init` + 提交整个工作区（较激进）
+6. 项目定位声明「六家没有的不做」与自检升级（原创）的表述冲突 —— **待 Bob 拍板**：改定位声明，还是把自检升级归入「宿主层能力，不属 Agent 机制」
+7. `update-status \| head -3` 会报 BrokenPipeError（投机性需求，未踩到就不修）
 
 ## 下一步
 1. **等待 Bob 的新需求**
@@ -64,4 +80,4 @@ hermes-code-agent **v2.4.1** 已交付（v2.4.0 可靠性版本 + 第二轮复�
 
 ---
 
-*最后更新：2026-09-12（v2.4.1 交付完成）*
+*最后更新：2026-09-12（v2.4.2 交付完成）*

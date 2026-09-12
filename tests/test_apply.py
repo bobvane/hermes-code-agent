@@ -282,7 +282,13 @@ def test_update_pending_snooze():
     (d / "SKILL.md").write_text("---\nversion: 9.9.9\n---\n")
     (d / "skill_state.json").write_text(
         '{"last_check_ts": 0, "next_prompt_ts": 0, '
-        '"pending": {"remote": "9.9.9", "local": "1.0.0"}}')
+        '"pending": {"remote": "9.9.9", "local": "1.0.0", '
+        '"name": "9.9.9 — test release title"}}')
+    r0 = subprocess.run([sys.executable, str(d / "scripts" / "hca_gate.py"),
+                         "update-pending"],
+                        cwd=d, capture_output=True, text=True)
+    check("update-pending surfaces the release title",
+          "test release title" in r0.stdout, f"out={r0.stdout[-120:]!r}")
     r = subprocess.run([sys.executable, str(d / "scripts" / "hca_gate.py"),
                         "update-pending", "--snooze"],
                        cwd=d, capture_output=True, text=True)
@@ -297,12 +303,26 @@ def test_update_pending_snooze():
           "none pending" in r2.stdout, f"out={r2.stdout[-120:]!r}")
 
 
+def test_snapshot_discloses_auto_init():
+    """snapshot on a non-git dir creates a repo — it must say so, not do it
+    silently."""
+    d = Path(tempfile.mkdtemp(prefix="hca-nogit-"))
+    (d / "work.txt").write_text("user data\n")
+    r = subprocess.run([sys.executable, str(GATE), "snapshot"],
+                       cwd=d, capture_output=True, text=True)
+    check("snapshot discloses the auto-init side effect",
+          r.returncode == 0 and "not a git repository" in r.stdout
+          and (d / ".git").exists(),
+          f"rc={r.returncode} out={r.stdout[:160]!r}")
+
+
 ALL = [test_modify_and_multihunk, test_same_file_two_blocks_chain,
        test_new_file, test_multifile_rollback, test_binary_file_rejected,
        test_delete_and_rename_rejected, test_path_safety,
        test_repo_root_anchoring, test_autocommit_refuses_secrets,
        test_run_timeout_kills_group, test_dangerous_command_verdicts,
-       test_git_dir_case_insensitive, test_update_pending_snooze]
+       test_git_dir_case_insensitive, test_update_pending_snooze,
+       test_snapshot_discloses_auto_init]
 
 if __name__ == "__main__":
     for t in ALL:

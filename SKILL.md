@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 2.4.1
+version: 2.4.2
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -161,7 +161,7 @@ Flow the model MUST follow:
 1. **CLARIFY stage** — run `python scripts/hca_gate.py update-check` (WITHOUT `--force`; `--force` bypasses the 72h throttle and is only for manual/debug use). The gate writes `last_check_ts`. Silent degrade on network failure (never block the coding task).
 2. **GATE stage** (after ALL checks green) — run `python scripts/hca_gate.py update-pending`.
    - Empty output (`"update: none pending"`) → do nothing, continue as usual.
-   - Non-empty output (`"PENDING local=X remote=Y"`) → `clarify("检测到新版本 vY（本地 vX），A. 升级 Skill  B. 不升级（3 天后再提示）", choices=["A. 升级 Skill", "B. 不升级"])`.
+   - Non-empty output (`"PENDING local=X remote=Y | <title>"`) → `clarify("检测到新版本 vY（本地 vX）：<title>。A. 升级 Skill  B. 不升级（3 天后再提示）", choices=["A. 升级 Skill", "B. 不升级"])` — include the release title so the user knows what changed.
      - User picks A → `python scripts/hca_gate.py update-apply` (downloads tarball, backs up old SKILL.md, overwrites skill directory; `skill_state.json` is exempt and survives). Then tell the user: "已升级到 vY，重启 Hermes 网关后生效。"
      - User picks B → run `python scripts/hca_gate.py update-pending --snooze` (this is the ONLY writer of `next_prompt_ts`; without it the prompt would re-appear on the very next task). No other action needed. **Do NOT call `update-apply` after B.**
 3. The gate subcommands are **L1** (per the approval tiers table): execute them without asking, but log their output honestly.

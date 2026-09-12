@@ -592,6 +592,9 @@ def cmd_detect(_args):
 
 def cmd_snapshot(args):
     if current_head() is None:
+        print("[HCA-GATE] not a git repository — initializing one and "
+              "committing the current tree as the snapshot baseline "
+              "(delete .git/ to undo this side effect).")
         rc, out = run(["git", "init"])
         if rc != 0:
             fail(f"not a git repo and git init failed: {out.strip()}")
@@ -1482,14 +1485,14 @@ def parse_version(v):
 
 
 def fetch_latest_release():
-    """Return the newest release tag (e.g. 'v2.1.1') or None on failure."""
+    """Return the newest release JSON (must contain 'tag_name') or None."""
     req = urllib.request.Request(GITHUB_API_RELEASES,
                                  headers={"User-Agent": "hermes-code-agent",
                                           "Accept": "application/vnd.github+json"})
     try:
         with urllib.request.urlopen(req, timeout=UPDATE_HTTP_TIMEOUT) as r:
             data = json.loads(r.read().decode("utf-8"))
-        return data.get("tag_name")
+        return data if data.get("tag_name") else None
     except Exception:
         return None
 
@@ -1504,20 +1507,23 @@ def cmd_update_check(args):
         sys.exit(0)
 
     local = local_skill_version()
-    remote = fetch_latest_release()
+    release = fetch_latest_release()
 
-    if remote is None:
+    if release is None:
         # network failure / rate limit -> silent degrade, never block
         print("[HCA-GATE] update: check failed (network), skipping")
         sys.exit(0)
 
+    remote = release["tag_name"]
     remote_clean = remote.lstrip("v")
     st["last_check_ts"] = now
     write_skill_state(st)
 
     if parse_version(remote_clean) > parse_version(local):
         st["pending"] = {"remote": remote_clean, "checked_at": now,
-                         "local": local}
+                         "local": local,
+                         # short title so the A/B prompt can say WHAT changed
+                         "name": (release.get("name") or "").strip()[:80]}
         write_skill_state(st)
         print(f"[HCA-GATE] UPDATE_AVAILABLE local={local} remote={remote_clean}")
     else:
@@ -1544,7 +1550,9 @@ def cmd_update_pending(args):
         if now >= st.get("next_prompt_ts", 0):
             local_v = pending.get("local", "unknown")
             remote_v = pending.get("remote", "unknown")
-            print(f"[HCA-GATE] PENDING local={local_v} remote={remote_v}")
+            title = pending.get("name") or ""
+            print(f"[HCA-GATE] PENDING local={local_v} remote={remote_v}"
+                  + (f" | {title}" if title else ""))
             sys.exit(0)
     print("[HCA-GATE] update: none pending")
     sys.exit(0)

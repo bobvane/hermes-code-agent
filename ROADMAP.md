@@ -110,6 +110,22 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 ## 當前版本 / Current version
 
+**v2.4.2** (2026-09-12): **三轮复审收尾** — Bob 问"三家复审能采纳的都修了吗"，逐条复核后发现 2 条可采纳但尚未做的，补齐：
+
+- **`snapshot` 在非 git 目录静默 `git init` + 提交用户整个工作区**（复审 3.4）—— 行为保留（否则 snapshot 无法工作），但补一行披露："not a git repository — initializing one and committing the current tree as the snapshot baseline (delete .git/ to undo)"。副作用从隐式变显式。
+- **升级提示不带 release 标题**（复审 3.11）—— `update-pending` 现在输出 `PENDING local=X remote=Y | <title>`，`fetch_latest_release()` 改返回完整 release JSON 并把 `name` 存进 `pending`。用户选 A/B 前能看到改了什么。
+- 测试 26 → 28 项（新增：release 标题透出、snapshot 自动 init 披露）
+
+**同轮复核中确认为误报/已覆盖，未改代码**：
+- `parse_patch` 混合 `diff --git` 多文件丢块 → 实测两块都正确落地，不成立
+- 危险命令"盲区"（sudo/doas/pkexec、chmod -R、chown、truncate、kill/pkill、git clean -fdx）→ 实测全部 exit 3 CONFIRM，已由 `default_decision: confirm` 的 fail-closed 默认覆盖
+- `import signal` 写两次 → 实际只有一处
+- LICENSE 年份 2026 → 当前确实是 2026
+- `skill_root()` symlink → `Path.resolve()` 已跟随链接
+- SKILL.md "1600+ 行" → 实际 301 行，且设计约束 #13 约束的是 README
+- 缺少 `.gitignore` → 文件一直存在
+- `hca_gate.py` 代码截断 → 复审方阅读器截断，文件完整（1747 行）
+
 **v2.4.1** (2026-09-12): **复审修复 + 自更新完整性落地** — 第二轮外部复审（Perplexity，针对 v2.3.0）发现 5 个 v2.4.0 未覆盖的真实问题，全部修复：
 
 - **`find ... -delete` 被放行**（安全）—— `find` 在 allowlist 里，而逃逸检测只看 `-exec`。实测 `find . -name "*.py" -delete` → exit 0 ALLOW。现已把 `-delete` / `-execdir` / `-ok` / `-okdir` / `-fprint0` 一并纳入强制 confirm。
