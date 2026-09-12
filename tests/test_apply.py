@@ -9,6 +9,7 @@ repo under /tmp. These pin the v2.4.0 fixes specifically — delete a
 regression test only when the behaviour it pins is deliberately dropped.
 """
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -316,13 +317,30 @@ def test_snapshot_discloses_auto_init():
           f"rc={r.returncode} out={r.stdout[:160]!r}")
 
 
+def test_broken_pipe_is_fail_closed():
+    """`... | true` closes the read end at once. Must not print a traceback,
+    and must NOT exit 0 — a broken pipe is not a verdict."""
+    d = new_repo()
+    cmd = (f"{shlex.quote(sys.executable)} {shlex.quote(str(GATE))} "
+           "update-status | true; exit ${PIPESTATUS[0]}")
+    r = subprocess.run(["bash", "-c", cmd], cwd=d,
+                       capture_output=True, text=True)
+    check("broken pipe: no traceback",
+          "Traceback" not in r.stdout + r.stderr,
+          f"out={(r.stdout + r.stderr)[-200:]!r}")
+    check("broken pipe: exits non-zero (fail closed)",
+          r.returncode == 1, f"rc={r.returncode}")
+    check("broken pipe: explains itself",
+          "closed early" in r.stderr, f"stderr={r.stderr[-160:]!r}")
+
+
 ALL = [test_modify_and_multihunk, test_same_file_two_blocks_chain,
        test_new_file, test_multifile_rollback, test_binary_file_rejected,
        test_delete_and_rename_rejected, test_path_safety,
        test_repo_root_anchoring, test_autocommit_refuses_secrets,
        test_run_timeout_kills_group, test_dangerous_command_verdicts,
        test_git_dir_case_insensitive, test_update_pending_snooze,
-       test_snapshot_discloses_auto_init]
+       test_snapshot_discloses_auto_init, test_broken_pipe_is_fail_closed]
 
 if __name__ == "__main__":
     for t in ALL:

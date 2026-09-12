@@ -1,7 +1,7 @@
 # Current Task
 
 ## 当前目标
-hermes-code-agent **v2.4.3** 已交付（v2.4.0 可靠性 + v2.4.1/v2.4.2/v2.4.3 三轮外部复审收尾 + 定位声明定案）：不加任何新 Agent 功能，专修"文档宣称的确定性高于代码实际提供的确定性"。
+hermes-code-agent **v2.4.4** 已交付（三轮外部复审全部结清 + 定位声明定案 + 管道断裂 fail-closed）：不加任何新 Agent 功能，专修"文档宣称的确定性高于代码实际提供的确定性"。
 
 ## 当前进度
 - [x] v2.1.x feature-complete + 自检升级
@@ -33,6 +33,10 @@ hermes-code-agent **v2.4.3** 已交付（v2.4.0 可靠性 + v2.4.1/v2.4.2/v2.4.3
 - [x] **v2.4.3 定位定案（2026-09-12）**：
   - [x] 对标红线限定为「Agent 编程机制」；服务性功能（自检升级/安装分发）不在对标范围
   - [x] SKILL.md / README.md / PROJECT_CONTEXT.md（§1 + 约束 #12）/ 本地项目规则 同步
+- [x] **v2.4.4（2026-09-13）**：
+  - [x] `BrokenPipeError` fail-closed 处理（`| head` 不再吐 traceback；**且绝不 exit 0** —— 管道断裂不是"通过"）
+  - [x] 测试 31 项（新增 3 项：无 traceback / 非零退出 / 有解释）
+  - [x] 本地安装副本升到 v2.4.4
 
 ## 当前正在处理
 无。等待 Bob 的新指令。
@@ -74,7 +78,7 @@ hermes-code-agent **v2.4.3** 已交付（v2.4.0 可靠性 + v2.4.1/v2.4.2/v2.4.3
 4. `run(cmd.split())` 带引号参数会切错
 5. quickcheck 只覆盖 .py/.ts/.tsx，且默认只扫 20 个文件
 6. ~~项目定位声明与自检升级的表述冲突~~ → **已定案 v2.4.3**：对标红线仅限 Agent 编程机制；自检升级属基本服务性功能，不在对标范围
-7. `update-status \| head -3` 会报 BrokenPipeError（投机性需求，未踩到就不修）
+7. ~~`update-status \| head` 会报 BrokenPipeError~~ → **已修 v2.4.4（fail-closed）**
 
 ## 下一步
 1. **等待 Bob 的新需求**
@@ -83,4 +87,4 @@ hermes-code-agent **v2.4.3** 已交付（v2.4.0 可靠性 + v2.4.1/v2.4.2/v2.4.3
 
 ---
 
-*最后更新：2026-09-12（v2.4.3 交付完成）*
+*最后更新：2026-09-13（v2.4.4 交付完成）*

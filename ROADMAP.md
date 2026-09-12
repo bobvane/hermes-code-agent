@@ -110,6 +110,12 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 ## 當前版本 / Current version
 
+**v2.4.4** (2026-09-13): **管道断裂 fail-closed** — 实测中两次踩到 `hca_gate.py update-status \| head` 吐 `BrokenPipeError` 堆栈（管道读端提前关闭）。门禁脚本输出 traceback 会让人误判"脚本崩了"，正好是本项目最不该有的信号。
+
+- `main()` 外层捕获 `BrokenPipeError`：静默关闭 stdout（dup2 devnull）→ stderr 说明 → **`sys.exit(1)`**
+- **关键设计点：绝不 exit 0**。若模型跑 `verify \| head` 而 verify 本来要判红，管道断裂被当成"通过"就是**假绿** —— 本项目存在的唯一理由就是防这个。宁可 fail-closed（假红可恢复，假绿不可恢复）
+- 测试 31 项（新增 3 项，用 `\| true` 确定性复现读端关闭）
+
 **v2.4.3** (2026-09-12): **定位声明范围限定** — 三轮复审都指出一处表述矛盾：定位声明写「六家没有的不做」，但自检升级是原创机制。Bob 拍板：**对标红线只覆盖 Agent 编程机制**，自检升级/安装分发属本体项目的**基本服务性功能**，与编程能力无关，不受该红线约束。
 
 - `SKILL.md` / `README.md` 首段：改为「**编程机制**对齐六家；**服务性功能**（自检升级、安装分发）不在对标范围内」

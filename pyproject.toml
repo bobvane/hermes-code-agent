@@ -1,6 +1,6 @@
 [project]
 name = "hermes-code-agent"
-version = "2.4.3"
+version = "2.4.4"
 description = "Self-correcting coding workflow as a Hermes skill (stdlib-only gate script)."
 requires-python = ">=3.8"
 

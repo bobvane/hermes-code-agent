@@ -1758,4 +1758,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BrokenPipeError:
+        # stdout closed early (e.g. `... | head`). Suppress the traceback — but
+        # never exit 0 here: this process may have been on its way to RED, and
+        # a false green is the one failure mode this gate exists to prevent.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        print("[HCA-GATE] stdout closed early (piped?) — verdict not shown. "
+              "Re-run without a pipe to read the exit code.", file=sys.stderr)
+        sys.exit(1)
