@@ -1,7 +1,8 @@
 # Hermes Code Agent
 
 > 把 Hermes 变成会自己纠错的编程智能体：**实现 → 测试 → 修复 → 全绿才算完成**。
-> 机制全部提炼自六家开源 coding agent（OpenCode / Codex CLI / Aider / Cline / Gemini CLI / Pi），不引入它们之外的原创设计。
+> **编程机制**提炼自六家开源 coding agent（OpenCode / Codex CLI / Aider / Cline / Gemini CLI / Pi），不引入它们之外的原创编程机制。
+> 自检升级等**服务性功能**与编程能力无关，不在对标范围内 —— 它们是本项目自身的基本服务。
 
 ## 安装
 

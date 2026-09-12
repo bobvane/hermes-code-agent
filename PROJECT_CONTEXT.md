@@ -1,6 +1,6 @@
-# PROJECT_CONTEXT — hermes-code-agent v2.4.2
+# PROJECT_CONTEXT — hermes-code-agent v2.4.3
 
-> 本文档固化 hermes-code-agent Skill 的完整上下文，供任何 Hermes session 在不了解聊天记录的情况下继续开发。版本：v2.4.2（截至 2026-09-12）。
+> 本文档固化 hermes-code-agent Skill 的完整上下文，供任何 Hermes session 在不了解聊天记录的情况下继续开发。版本：v2.4.3（截至 2026-09-12）。
 
 ---
 
@@ -9,9 +9,10 @@
 把一个弱/中档模型变成会"先验证、后完成"的编程智能体：实现 → 测试/校验 → 修复 → 全绿才算完成。
 
 **对标六家**（OpenCode 主要，Codex + Aider + Cline + Gemini CLI + Pi）：
-- **不引入任何六家没有的原创机制** — 砍掉功能在文档中消失，不提
+- **不引入任何六家没有的原创「编程机制」** — 砍掉功能在文档中消失，不提
+  - 范围限定（Bob 2026-09-12）：**服务性功能**（自检升级 / 安装分发 / 节流指针）与编程能力无关，属本体项目的基本服务，不在对标范围内
 - 对标清单见 `references/six-agent-feature-matrix.md`
-- 决策记录：Bob 2026-08-24 拍板「六家没有的不做，有的尽量加，Skill 形态达不到的除外」
+- 决策记录：Bob 2026-08-24 拍板「六家没有的不做，有的尽量加，Skill 形态达不到的除外」；2026-09-12 补充限定 —— 该红线针对**编程机制**，服务性功能不受此限
 
 **模型门槛**：编码特化 ≥8B 激活参数 / 通用 ≥24B；弱模型实验性不担保（v1.2.1 起明示）。
 
@@ -452,7 +453,7 @@ python scripts/hca_gate.py update-apply     # 需先有 pending
 | 9 | **failure fingerprint 集合语义** | 序无关、计数无关，有修复立即重置 |
 | 10 | **skill_state.json 不在项目目录** | 升级豁免；放在 `/opt/data/skills/hermes-code-agent/` |
 | 11 | **72h 检测节流 + 3d 提示冷却** | Bob 2026-08-28 两次确认，不可缩短 |
-| 12 | **六家对标零原创原则** | Bob 2026-08-24 拍板；任何新功能必须有对标 |
+| 12 | **六家对标零原创原则（仅限 Agent 编程机制）** | Bob 2026-08-24 拍板 + 2026-09-12 限定：新增**编程机制**必须有对标；服务性功能（自检升级等）不属对标范围 |
 | 13 | **README 中文主体，简洁** | Bob 2026-08-26 明确要求 |
 | 14 | **版本号三处同步**（SKILL.md + ROADMAP + git tag） | CI 从 tag 打 Release，漏改会跳号 |
 
@@ -508,8 +509,9 @@ python scripts/hca_gate.py update-apply     # 需先有 pending
 | v2.3.0 | 2026-09-07 | 单一改码入口（砍 patch，apply 唯一） |
 | **v2.4.0** | **2026-09-12** | **可靠性版本（P0 数据丢失/密钥泄露修复 + 回归测试）** |
 | v2.4.1 | 2026-09-12 | 复审修复（find -delete / .GIT 大小写 / tar 过滤 / snooze 冷却 / SHA-256 资产） |
-| **v2.4.2** | **2026-09-12** | **复审补漏（snapshot 自动 git init 披露 / 升级提示带版本标题）** |
+| v2.4.2 | 2026-09-12 | 复审补漏（snapshot 自动 git init 披露 / 升级提示带版本标题） |
+| **v2.4.3** | **2026-09-12** | **定位声明范围限定（对标红线仅限 Agent 编程机制）** |
 
 ---
 
-*本文档由 hermes-code-agent Skill 自身生成，version: 2.4.2。任何修改请同步更新本文档顶部的版本声明。*
+*本文档由 hermes-code-agent Skill 自身生成，version: 2.4.3。任何修改请同步更新本文档顶部的版本声明。*

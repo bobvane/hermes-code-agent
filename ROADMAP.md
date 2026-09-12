@@ -110,6 +110,13 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 ## 當前版本 / Current version
 
+**v2.4.3** (2026-09-12): **定位声明范围限定** — 三轮复审都指出一处表述矛盾：定位声明写「六家没有的不做」，但自检升级是原创机制。Bob 拍板：**对标红线只覆盖 Agent 编程机制**，自检升级/安装分发属本体项目的**基本服务性功能**，与编程能力无关，不受该红线约束。
+
+- `SKILL.md` / `README.md` 首段：改为「**编程机制**对齐六家；**服务性功能**（自检升级、安装分发）不在对标范围内」
+- `PROJECT_CONTEXT.md` §1 项目目标、§14 设计约束 #12：补范围限定与 Bob 2026-09-12 拍板记录
+- `hermes-code-agent.md`（本地项目规则）：同步限定
+- 依据：v1.8.2 按旧口径砍掉的三个原创机制（guard 反作弊、exit-code 硬门禁降级、state 断点恢复）**均为编程机制**，判定不变 —— 本次只是把既有实践写清楚，不是放宽红线
+
 **v2.4.2** (2026-09-12): **三轮复审收尾** — Bob 问"三家复审能采纳的都修了吗"，逐条复核后发现 2 条可采纳但尚未做的，补齐：
 
 - **`snapshot` 在非 git 目录静默 `git init` + 提交用户整个工作区**（复审 3.4）—— 行为保留（否则 snapshot 无法工作），但补一行披露："not a git repository — initializing one and committing the current tree as the snapshot baseline (delete .git/ to undo)"。副作用从隐式变显式。

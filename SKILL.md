@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 2.4.2
+version: 2.4.3
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -15,7 +15,7 @@ metadata:
 # Hermes Code Agent — 验证循环
 
 > **Hermes 代码助手（自纠错编程工作流）**
-> 把 Hermes 变成一个会自己纠错的编程智能体：用「先验证、后完成」的循环（实现→测试/校验→修复→全绿才算完成）包裹模型。机制对齐六家开源 coding agent（OpenCode / Codex CLI / Aider / Cline / Gemini CLI / Pi），不引入它们之外的原创机制。
+> 把 Hermes 变成一个会自己纠错的编程智能体：用「先验证、后完成」的循环（实现→测试/校验→修复→全绿才算完成）包裹模型。**编程机制**对齐六家开源 coding agent（OpenCode / Codex CLI / Aider / Cline / Gemini CLI / Pi）：六家没有的编程机制不做、有的尽量加。项目自身的**服务性功能**（自检升级、安装分发）与编程能力无关，不在对标范围内。
 
 Turn Hermes into a self-correcting coding agent with a verify-before-done loop (implement → test → fix → green), the same skeleton every major open coding agent converges on.
 
