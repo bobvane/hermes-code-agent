@@ -7,9 +7,14 @@
 *.local
 .env
 __pycache__/
+.venv/
+venv/
 
 # local build notes (not for GitHub)
 hermes-code-agent.md
+
+# hca loop counters (per-project runtime state, never tracked)
+.hca_state.json
 
 # skill-level throttle state (lives next to SKILL.md, not tracked here)
 skills/hermes-code-agent/skill_state.json

@@ -45,33 +45,46 @@ STATE_FILE = ".hca_state.json"
 DOOM_THRESHOLD = 3
 MAX_VERIFY_CHARS_DEFAULT = 2000
 
+# Paths autocommit must never stage (the skill's own hard rule: never commit
+# secrets). Deliberately narrow — a false positive only means the agent must
+# commit that file explicitly; a false negative leaks a key into git history.
+SECRET_PATH_RE = re.compile(
+    r"(^|/)(\.env(\.[^/]+)?|\.git-credentials|\.netrc|id_rsa|id_ed25519)$"
+    r"|\.(pem|key|p12|pfx|keystore|jks)$"
+    r"|(^|/)[^/]*(secret|credential|apikey|api[_-]?key)[^/]*"
+    r"\.(json|ya?ml|txt|env|ini|toml)$",
+    re.IGNORECASE)
+
 
 # ---------------------------------------------------------------- utilities
 
 def run(cmd, timeout=300):
     """Run a command in its own process group; return (returncode, output).
-    On timeout the whole group is killed (start_new_session=True + killpg)
-    so a hang in a child (e.g. impl self-deadlock freezing pytest) can never
-    block the gate — v1.8.1 hardening."""
+    On timeout the whole process GROUP is killed — we keep the Popen handle so
+    we have a real pid to killpg (subprocess.run's TimeoutExpired carries no
+    pid, so the v1.8.1 code below could never fire). Defends against a hung
+    child/impl that forked subprocesses."""
     import signal
     try:
-        p = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
-            start_new_session=True
-        )
-        return p.returncode, (p.stdout or "") + (p.stderr or "")
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True,
+                             start_new_session=True)
     except FileNotFoundError:
         return 127, f"command not found: {cmd[0]}"
-    except subprocess.TimeoutExpired as te:
-        # the subprocess.run call already killed the leader; also reap
-        # any surviving process-group members (defensive — impl may fork)
-        pid = getattr(te, "pid", None)
-        if pid is not None:
-            try:
-                import signal
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
-            except Exception:
-                pass
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return p.returncode, (out or "") + (err or "")
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, AttributeError,
+                OSError):
+            # Windows/odd platform: fall back to killing the leader only
+            p.kill()
+        try:
+            p.communicate(timeout=5)   # reap, don't leave a zombie
+        except Exception:
+            pass
         return 124, f"timeout after {timeout}s: {' '.join(cmd)}"
 
 
@@ -80,11 +93,21 @@ def fail(msg):
     sys.exit(1)
 
 
+def repo_root() -> Path:
+    """Repository root — git toplevel when inside a work tree, else cwd.
+    Path validation must be anchored to the REPO, not to wherever the model
+    happened to `cd` (a subdir run must not shrink the allowed write area)."""
+    rc, out = run(["git", "rev-parse", "--show-toplevel"], timeout=10)
+    if rc == 0 and out.strip():
+        return Path(out.strip()).resolve()
+    return Path.cwd().resolve()
+
+
 def safe_repo_path(raw_path: str) -> Path:
     """Resolve and validate a patch path stays inside the repository.
     Rejects absolute paths, .. traversal, symlinks escaping repo, .git/, and
     protected state files. Raises ApplyPatchError on violation."""
-    root = Path.cwd().resolve()
+    root = repo_root()
     candidate = (root / raw_path).resolve()
     try:
         candidate.relative_to(root)
@@ -93,13 +116,6 @@ def safe_repo_path(raw_path: str) -> Path:
             "path", f"path escapes repository: {raw_path}")
     if candidate == root:
         raise ApplyPatchError("path", "cannot modify repository root")
-    if candidate.is_symlink():
-        target = candidate.resolve()
-        try:
-            target.relative_to(root)
-        except ValueError:
-            raise ApplyPatchError(
-                "path", f"symlink escapes repository: {raw_path} -> {target}")
     if ".git" in candidate.parts:
         raise ApplyPatchError("path", f"cannot modify .git internals: {raw_path}")
     if candidate.name in {STATE_FILE, "skill_state.json"}:
@@ -197,8 +213,25 @@ def parse_patch(patch_text):
     blocks = []
     cur = None
     for raw in patch_text.splitlines():
+        # Unsupported diff semantics: reject explicitly instead of letting
+        # them fall through to a confusing [PATH]/"no parseable blocks" error.
+        if raw.startswith(("rename from ", "rename to ")):
+            raise ApplyPatchError(
+                "parse", "rename patches are not supported by apply "
+                         "(use `git mv` + a normal modify patch)")
+        if raw.startswith("deleted file mode"):
+            raise ApplyPatchError(
+                "parse", "delete-file patches are not supported by apply "
+                         "(use `git rm` or the shell)")
+        if raw.startswith("GIT binary patch"):
+            raise ApplyPatchError(
+                "parse", "binary patches are not supported by apply")
         m = re.match(r"\+\+\+ (?:b/)?(\S+)", raw)
         if m and not raw.startswith("---"):
+            if m.group(1) == "/dev/null":
+                raise ApplyPatchError(
+                    "parse", "delete-file patches are not supported by apply "
+                             "(use `git rm` or the shell)")
             cur = {"path": m.group(1), "lines": []}
             blocks.append(cur)
             continue
@@ -244,17 +277,26 @@ def parse_patch(patch_text):
     return blocks
 
 
-def apply_seek_patch_file(path, hunks):
-    """Apply parsed hunks to ONE file atomically via seek_sequence. All hunks
-    must land or nothing is written (Codex atomicity). Raises
-    ApplyPatchError on the first failing hunk with expected/actual context.
-    Returns the new content as string (does NOT write) — caller handles atomic write."""
+def apply_seek_patch_file(path, hunks, base_text=None):
+    """Apply parsed hunks to ONE file via seek_sequence. All hunks must land
+    or nothing is produced (Codex atomicity). Raises ApplyPatchError on the
+    first failing hunk with expected/actual context.
+    Returns the new content as string (does NOT write) — caller commits.
+    `base_text` lets the caller chain several blocks that touch the same file
+    (None = read the file from disk)."""
     safe_path = safe_repo_path(path)
-    try:
-        text = safe_path.read_text(encoding="utf-8") if safe_path.exists() else ""
-    except OSError as e:
-        raise ApplyPatchError("io", f"cannot read {path}: {e}")
-    lines = text.splitlines()
+    if base_text is None:
+        if safe_path.exists():
+            try:
+                base_text = safe_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                raise ApplyPatchError(
+                    "io", f"binary file not supported by apply: {path}")
+            except OSError as e:
+                raise ApplyPatchError("io", f"cannot read {path}: {e}")
+        else:
+            base_text = ""
+    lines = base_text.splitlines()
     # apply bottom-up so earlier indices stay valid after splices
     resolved = []
     for idx, h in enumerate(hunks, start=1):
@@ -278,10 +320,12 @@ def apply_seek_patch_file(path, hunks):
 
 def cmd_apply(args):
     """Codex-style tolerant patch application (apply-patch module port).
-    Parse → seek_sequence 4-level match → atomic write per file.
+    Parse → seek_sequence 4-level match → transactional commit.
     On ANY failure: print the structured error (which hunk, expected vs
     actually-there) so the model can fix the patch and retry — exit 1.
-    Two-phase: all files validated in memory, then written atomically."""
+    Phase 1 validates every block in memory (same-file blocks chain off the
+    previous block's result, not the stale disk copy). Phase 2 commits every
+    file and rolls back all of them if any write fails."""
     patch_text = Path(args.patch_file).read_text(encoding="utf-8") \
         if args.patch_file else sys.stdin.read()
     try:
@@ -291,14 +335,13 @@ def cmd_apply(args):
         print("[HCA-GATE] Fix the patch format and re-submit.")
         sys.exit(1)
 
-    # Phase 1: validate all files in memory
-    results = []
-    new_contents = {}
+    # Phase 1 — validate in memory. `working` carries the evolving content so
+    # a second block for the same file builds on the first block's result.
+    working = {}
     for b in blocks:
         try:
-            new_content = apply_seek_patch_file(b["path"], b["hunks"])
-            new_contents[b["path"]] = new_content
-            results.append((b["path"], len(b["hunks"])))
+            working[b["path"]] = apply_seek_patch_file(
+                b["path"], b["hunks"], working.get(b["path"]))
         except ApplyPatchError as e:
             print(f"[HCA-GATE-RED]\n{e.render()}")
             print("[HCA-GATE] PATCH channel: feed this error back, adjust "
@@ -306,23 +349,50 @@ def cmd_apply(args):
                   "re-submit. No files were modified.")
             sys.exit(1)
 
-    # Phase 2: atomic write all files
-    for path, content in new_contents.items():
-        safe_path = safe_repo_path(path)
-        safe_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = safe_path.with_suffix(safe_path.suffix + ".tmp")
-        try:
-            tmp_path.write_text(content, encoding="utf-8")
-            os.replace(tmp_path, safe_path)
-        except OSError as e:
-            # Cleanup on failure
-            if tmp_path.exists():
-                tmp_path.unlink(missing_ok=True)
-            raise ApplyPatchError("io", f"cannot write {path}: {e}")
+    # Phase 2 — commit all files as one transaction. A failure at file N
+    # restores files 1..N-1 from the in-memory originals (and removes files
+    # that did not exist before), so the tree is never left half-applied.
+    applied = []          # [(safe_path, original_bytes | None)]
+    try:
+        for path, content in working.items():
+            safe_path = safe_repo_path(path)
+            safe_path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(
+                dir=str(safe_path.parent),
+                prefix=safe_path.name + ".", suffix=".hca")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                applied.append((safe_path,
+                                safe_path.read_bytes()
+                                if safe_path.exists() else None))
+                os.replace(tmp_name, safe_path)
+            except OSError:
+                Path(tmp_name).unlink(missing_ok=True)
+                raise
+    except OSError as e:
+        restores = []
+        for p, original in applied:
+            try:
+                if original is None:
+                    p.unlink(missing_ok=True)
+                else:
+                    p.write_bytes(original)
+                restores.append(p.name)
+            except OSError:
+                pass
+        print(f"[HCA-GATE-RED]\n[IO] commit failed: {e}")
+        print(f"[HCA-GATE] ROLLED BACK {len(restores)} file(s) "
+              f"({', '.join(restores)}) — the tree is unchanged. Cause is "
+              "environmental (permissions / disk), not the patch.")
+        sys.exit(1)
 
-    for path, nh in results:
-        print(f"  ok  {path} ({nh} hunk(s), seek_sequence)")
-    ok(f"patch applied atomically to {len(results)} file(s)")
+    for path in working:
+        print(f"  ok  {path} ({len(working[path].splitlines())} line(s), "
+              "seek_sequence)")
+    ok(f"patch applied atomically to {len(working)} file(s)")
 
 
 # ----------------------------------------------------------------- repo map
@@ -381,6 +451,10 @@ def cmd_repomap(_args):
         return
     print(f"[HCA-GATE] repo map — {len(ranked)} files with symbols "
           f"(scanned {nfiles}), top {min(REPO_MAP_TOP, len(ranked))}:")
+    if nfiles > REPO_MAP_MAX_FILES:
+        print(f"[HCA-GATE] WARNING: truncated at {REPO_MAP_MAX_FILES} files "
+              f"({nfiles} source files present) — the map is NOT complete. "
+              "List the relevant directory yourself if the target is missing.")
     for path, cnt in ranked[:REPO_MAP_TOP]:
         print(f"  {path} ({cnt})  {', '.join(defs[path])}")
     print("[HCA-GATE] use: read the most relevant file directly; "
@@ -501,6 +575,7 @@ def cmd_detect(_args):
         print("[HCA-GATE] No recognizable project markers "
               "(pyproject/package.json/go.mod/Cargo.toml). "
               "Ask the user how to verify.")
+        print(f"[HCA-GATE] FIX (if you just need a runner): {runner_fix_hint()}")
         sys.exit(1)
     print("[HCA-GATE] detected commands (review before running — "
           "project scripts run with the agent's privileges):")
@@ -770,13 +845,28 @@ def venv_python_hint():
     return None
 
 
+def runner_fix_hint():
+    """One concrete install line for when no test runner is available.
+    Reachable from the 'no test command detected' fail path too — that is the
+    case that actually needs it."""
+    hint = venv_python_hint()
+    if hint:
+        py = hint.split()[0]
+        return (f"install the runner: `{py} -m ensurepip --upgrade && "
+                f"{py} -m pip install pytest`")
+    return "create a runner: `uv venv .venv && uv pip install pytest`"
+
+
 def cmd_verify(args):
     cmds = detect_commands()["test"]
     if not cmds:
         st = load_state()
         reminder = budget_reminder(st)  # fire soft warnings even on early RED
-        fail("no test command detected — ask the user; do NOT fake green"
-             + reminder)
+        print("[HCA-GATE] no test command detected (no project markers + no "
+              "working runner). Look for the tests yourself: tests/ dir, "
+              "test_*.py, package.json scripts, Makefile targets.")
+        print(f"[HCA-GATE] FIX: {runner_fix_hint()}")
+        fail("do NOT fake green" + reminder)
     failures = []
     unavailable = []
     last_out = ""
@@ -902,8 +992,17 @@ def autocommit(st):
     if add[0] != 0:
         return
     run(["git", "reset", "-q", "--", ".hca_state.json"])
+    # Never commit secrets (skill hard rule): unstage sensitive-looking paths
+    # that `git add -A` swept in from a project without a matching .gitignore.
+    staged = run(["git", "diff", "--cached", "--name-only"])[1].splitlines()
+    secrets = [f for f in staged if SECRET_PATH_RE.search(f)]
+    if secrets:
+        run(["git", "reset", "-q", "--"] + secrets)
+        print("[HCA-GATE] WARNING: refused to commit sensitive path(s): "
+              + ", ".join(secrets[:5])
+              + " — add them to .gitignore, or commit them yourself.")
     if run(["git", "diff", "--cached", "--quiet"])[0] == 0:
-        return  # only the state file changed — nothing to land
+        return  # only the state file / secrets changed — nothing to land
     n_red = (st.get("redfix") or {}).get("verify", 0)
     msg = f"hca: green checkpoint (verify pass, red-cycles={n_red})"
     c = run(["git", "commit", "-qm", msg])

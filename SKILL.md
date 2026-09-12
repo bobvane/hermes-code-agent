@@ -36,7 +36,7 @@ Every implementation task goes through this. The agent must NOT report "done" un
 ```text
 1. CLARIFY SCOPE   — what file(s)/behavior change? what does "done" mean (test? lint? run)?
                       Detect the test/lint/build command from repo signals (see Zero-config section) before asking; only ask if undetectable.
-                      **`python scripts/hca_gate.py update-check --force`** (once per day) to detect a newer release; suppresses if none or throttled.
+                      **`python scripts/hca_gate.py update-check`** (no `--force`: the 72h throttle is the point) to detect a newer release; suppresses if none or throttled.
 2. PLAN (separate mode) — switch to PLAN cognition: explore, read relevant files, decide approach.
                       Output a 3-5 step mini-plan. Do NOT edit code in this step.
                       (If an upstream plan exists, consume it and skip to step 3.)
@@ -158,7 +158,7 @@ The skill checks its own GitHub release (`bobvane/hermes-code-agent`) without bl
 
 Flow the model MUST follow:
 
-1. **CLARIFY stage** — run `python scripts/hca_gate.py update-check --force`. The gate writes `last_check_ts`. Silent degrade on network failure (never block the coding task).
+1. **CLARIFY stage** — run `python scripts/hca_gate.py update-check` (WITHOUT `--force`; `--force` bypasses the 72h throttle and is only for manual/debug use). The gate writes `last_check_ts`. Silent degrade on network failure (never block the coding task).
 2. **GATE stage** (after ALL checks green) — run `python scripts/hca_gate.py update-pending`.
    - Empty output (`"update: none pending"`) → do nothing, continue as usual.
    - Non-empty output (`"PENDING local=X remote=Y"`) → `clarify("检测到新版本 vY（本地 vX），A. 升级 Skill  B. 不升级（3 天后再提示）", choices=["A. 升级 Skill", "B. 不升级"])`.
@@ -169,6 +169,22 @@ Flow the model MUST follow:
 Throttle defaults: `UPDATE_CHECK_HOURS=72` (3 days), `UPGRADE_PROMPT_DAYS=3` (same value keeps them in sync), `UPDATE_HTTP_TIMEOUT=5` (short, never stall the task).
 
 Debug: `python scripts/hca_gate.py update-status` prints both pointers and pending info so you can verify the throttling logic.
+
+## Release procedure (dev → GitHub → self-upgrade)
+
+When working on this project itself (not projects the skill operates on), the deliverable is a **new release on the install side** — the user is using the v2.x.y copy in `/opt/data/skills/hermes-code-agent/`, not the dev tree.
+
+**Default path (use this 100% of the time for normal development):**
+
+1. Make the change in `/opt/data/workspace/hermes-code-agent/`. Use the project's own hard loop on itself: `snapshot` → edit → `quickcheck` → `verify` (or manual smoke if no test suite) → gate.
+2. Bump version: SKILL.md frontmatter + ROADMAP.md "當前版本" + PROJECT_CONTEXT.md header must agree. Bob's rule: last digit 0-9 increment, 9 → carry (v2.11.9 → v2.12.0). Three-place sync is mandatory (CI reads from package.json-equivalent field; missing one = silent skip on next release).
+3. Update CURRENT_TASK.md with the milestone, then commit. Tag: `git tag vX.Y.Z && git push origin main vX.Y.Z`.
+4. Create GitHub Release: `gh_token` lives in `/opt/data/.env` as `GITHUB_TOKEN=...` (also used by `github-sync-forks.py` and `hermes-backup.py`). `curl -X POST .../releases` with the release notes body. The release tarball is what `update-apply` downloads.
+5. **Do NOT touch `/opt/data/skills/hermes-code-agent/`.** The next task's CLARIFY-stage `update-check` (or the user's manual `update-apply`) will pick it up. Manually `cp` here is the wrong move (Bob 拍板 2026-09-07: self-upgrade is the deliverable, not manual sync).
+
+**Only break the default when** GitHub is unreachable, fresh-installing, or hotfixing before the 72h throttle window expires. See `references/install-copy-sync.md` for the manual fallback (now framed as the exception, not the rule).
+
+**Verify the deliverable actually lands:** after release, run the install copy's `update-check --force` and `update-status`. If the install copy still shows the old version, the upgrade flow has a bug — that IS a finding, report it instead of papering over with a manual `cp`.
 
 **Rules file is optional override** — the two-layer conventions above (global CONVENTIONS.md + per-project `<项目名>.md`) add project-specific overrides on top of the built-in defaults. If neither exists, the skill runs identically (auto-detect + built-in safety).
 
