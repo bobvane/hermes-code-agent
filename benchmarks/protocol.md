@@ -13,7 +13,7 @@
 | A组 | 无 harness：只给题面，明确"写完即完成，不运行测试" |
 | B组 | 带 harness：硬性标准=hca_gate verify exit 0 才算完成 |
 | 工作目录 | /opt/data/workspace/hca-bench-<date>/（测完删除） |
-| 环境 | .venv + pytest 预装（排除环境噪声）；裁判文件先 guard record |
+| 环境 | .venv + pytest 预装（排除环境噪声）；裁判文件不得被被测模型修改 |
 
 ## 记录字段（每组每次运行一行）
 

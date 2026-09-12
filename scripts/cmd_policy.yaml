@@ -1,4 +1,4 @@
-# cmd_policy.yaml — dangerous-command interception rules (v1.9.0)
+# cmd_policy.yaml — dangerous-command interception rules (v2.4.0)
 # Ported from two upstream engines:
 #   - Codex CLI execpolicy: three-state prefix table (allow/forbidden/prompt),
 #     first-token keyed, token-wise prefix match with alternatives

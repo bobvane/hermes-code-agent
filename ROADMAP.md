@@ -110,6 +110,40 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 ## 當前版本 / Current version
 
+**v2.4.0** (2026-09-12): **可靠性版本 (reliability release)** — 不加任何新 Agent 功能，专修"文档宣称的确定性高于代码实际提供的确定性"。触发：Bob 让 ChatGPT 复审 GitHub main + 本地实测审计，两份清单合并后 14 条成立/部分成立、0 误报。
+
+**P0（会真正造成伤害）**
+- **`autocommit` 会提交 `.env` 密钥** —— `git add -A` 无差别暂存，违反 Skill 自己写死的 "Never commit secrets"。修复：新增 `SECRET_PATH_RE`（`.env*` / `*.pem|key|p12|pfx|keystore|jks` / `*secret*|credential|apikey` 配置文件）+ `git add -A` 后 `git reset` 掉并告警。
+- **同一文件出现两个 file block 时，第一次改动静默丢失** —— phase 1 每个 block 都从磁盘重读，第二个 block 基于原始内容计算后覆盖第一个的结果；且谎报 "applied atomically to 2 file(s)"。修复：phase 1 维护 `working` dict，block 链式叠加（`apply_seek_patch_file(..., base_text=working.get(path))`）。
+- **多文件补丁非真原子** —— 逐文件 `os.replace`，第 N 个失败时 1..N-1 已落盘，且 phase 2 无异常处理 → 裸 traceback。修复：`applied` 记录每个已替换文件的原字节，任一失败全部还原（新建文件删除），输出 `ROLLED BACK n file(s)`。
+- **超时"杀整个进程组"是死代码** —— `subprocess.run` 的 `TimeoutExpired` 不携带 `pid`（Python 3.13 实测属性表确认），`getattr(te,"pid",None)` 恒为 None。修复：改用 `Popen` + `communicate(timeout)` + `os.killpg(os.getpgid(p.pid))`。
+- **二进制文件 → 裸 `UnicodeDecodeError`** —— 只 catch OSError。修复：捕获 `UnicodeDecodeError` → `[IO] binary file not supported`。
+
+**P1（边界/可靠性）**
+- `mkstemp` 替代可预测的 `<file>.tmp`（并发冲突 + 覆盖用户文件 + 中断残留）
+- 删除/重命名/二进制补丁显式拒绝：`[PARSE] delete-file patches are not supported by apply`（此前删除补丁报 `[PATH] path escapes repository: /dev/null`，重命名报 "no parseable file blocks"，均为误导）
+- `safe_repo_path` 的仓库根改用 `git rev-parse --show-toplevel`（此前 = cwd，子目录运行时边界判定错误）；顺带删除已死代码 `candidate.is_symlink()`（`resolve()` 已跟随链接，逃逸由 `relative_to` 拦截）
+- `runner_fix_hint()`：`detect`/`verify` 在"无项目标记 + 无可用 runner"时给出具体安装命令（此前 `venv_python_hint()` 的指引在该分支不可达）
+- `.gitignore` 加 `.hca_state.json`、`.venv/`
+- SKILL.md 正常工作流去掉 `update-check --force`（`--force` 绕过节流，与 72h 设计矛盾）
+- `repomap` 超过 400 文件时输出 WARNING（此前静默截断，关键文件可能不在 map 中）
+
+**测试（Bob 拍板：只建一个文件，不上框架）**
+- 新增 `tests/test_apply.py`：16 项检查，纯 stdlib（`python tests/test_apply.py`），同时兼容 pytest
+- 新增 `pyproject.toml`（项目标记 + `testpaths`）—— 此前本项目**无法自校验**（`detect` 找不到任何标记）
+- 删除 `benchmarks/run_v180.py`（调用 v1.8.2 已删的 `guard record`，且用 `stream=True` 与 SKILL 推荐矛盾 —— 死代码）
+
+**文档漂移整肃**
+- 9 个 `references/goal-*.md` 状态行由"未实施"改为"✔ 已实施（版本号）"
+- `six-agent-feature-matrix.md` / `four-repo-comparison.md` / `protocol.md` 去掉已删功能的引用
+- `cmd_policy.yaml` 头注释版本号对齐
+- README 表格畸形行（`||` 开头）修复；补 `## 自检` 段
+- SKILL.md 删除"self-tested in tests/test_hca_gate.py"（文件早已不存在）与 `v180-benchmark-report.md` 死引用（顺带修掉两个标题连排）
+
+**未采纳**：detect 的 confidence 排序（改进项非 bug）、"`rm` 过度 deny"（破坏性操作 deny 是有意设计）、拆五个事实源文件（个人项目过度工程）。
+
+**验证**：`python tests/test_apply.py` 16/16 通过；`hca_gate.py detect` → `verify` → autocommit 全链路在本仓库首次跑通。
+
 **v2.3.0** (2026-09-07): **单一改码入口 (single edit entry point)** — 砍掉 `patch` 子命令（git-apply 3-tier 老路径），`apply`（Codex seek_sequence 4-level + 原子写入）成为唯一改码入口。Bob 拍板"既然新版更安全就一步到位砍掉"。删除内容：`cmd_patch()` + `_unified_diff_blocks()` + `_wsfree_count/iter/span` 共约 130 行代码，argparse 注册、dispatch table 一并移除。SKILL.md 全部 `patch` 引用替换为 `apply` 或文本描述；README 对照表「补丁容错应用」更新为「四级匹配 + 原子写入」。验证：syntax check 通过、`apply` 单文件修改成功、调用 `patch` 子命令清晰报错「invalid choice」。**Breaking change**: 任何调用 `hca_gate.py patch <diff>` 的脚本需改为 `apply <diff>`。
 
 **v2.2.0** (2026-09-07): **安全硬化 (security hardening)** — Perplexity 评审建议落地的 P0 修复：①**补丁路径校验**（`safe_repo_path()`）— 拒绝 `..` 穿越、绝对路径、`.git/` 内部、受保护状态文件、逃逸符号链接，违反抛 `ApplyPatchError("path", ...)`；②**`apply` 两阶段原子写入** — 全部文件在内存里预验证后再统一 `os.replace()` 落盘，多文件补丁中间失败不会半应用；③**`update-apply` SHA-256 校验** — 下载 release tarball 后从 `vX.Y.Z.sha256` 拉期望哈希比对，不匹配立即中止；提供 `--skip-verify` 逃生口；④**`check_cmd` 解释器逃逸拦截** — 新增 `_check_interpreter_escape()` 检测 `python -c`/`node -e`/`bash -c`/`find -exec`/`xargs`/`env` 绕过模式，强制 `confirm` 而非默认 allow。P1 加固：`patch` 子命令 tier3 输出 WARNING（fuzzy whitespace 风险），`detect` 加 project-script review 提示，README 加 系统支持/平台依赖/网络 章节。`patch` 子命令保留为 legacy 入口（Bob 拍板不合并双入口），SKILL.md 推荐主用 `apply`。Backwards-compat: `apply` 子命令 4-level matching 行为不变。

@@ -14,18 +14,17 @@
 ### 题 A: 并发 KV 缓存 (嵌套事务 + TTL, 7 裁判)
 
 **接口约定**：`Cache()`, `Cache(cleanup_interval=0.2)`, `set/get/delete`, 参数化 `impl_a/impl_b`。
-裁判: `benchmarks/test_cache_param.py` (7 个边界用例)。
+裁判: 已移除（v180 时代文件，未随仓库保留）。
 
 ### 题 B: TTLCache LRU+TTL 缓存 (6 裁判)
 
 **接口**: `TTLCache(capacity, ttl)`, `set/get/delete`, 多线程并发安全。
-完整题面: `../AI编程能力测试题_TTLCache.md`
 裁判: `benchmarks/test_ttlcache.py` (6 个边界用例)。
 
 ### 题 C: Async AI Provider Scheduler (5 裁判) — 2026-08-25
 
 **接口**: `Scheduler(providers)`, `await request(model, prompt)`, `call_provider` (可 mock), `circuit_state(name)`, `stats()`, `_select_provider()`。
-裁判: `judge_scheduler.py` (5 pytest)。
+裁判: 已移除（v180 时代文件，未随仓库保留）。
 
 ## 裁判測試 / Judge tests
 
@@ -99,9 +98,9 @@
 ## 如何复现 / How to re-run
 
 ```bash
-cd /opt/data/bench_ttl_opus  # 或任意工作区
+cd /tmp/bench_ttl   # 任意临时工作区
 uv venv .venv && . .venv/bin/activate && uv pip install pytest
-cp /opt/data/hermes-code-agent/benchmarks/test_ttlcache.py .
+cp <repo>/benchmarks/test_ttlcache.py .
 # A 组: 写 impl_a.py 后: python -m pytest test_ttlcache.py -k impl_a
 # B 组: 写 impl_b.py 后: python -m pytest test_ttlcache.py -k impl_b
 ```

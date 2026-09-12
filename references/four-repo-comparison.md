@@ -40,7 +40,7 @@
 | 2 | 压缩 split point 只取 user 非 tool 边界 + 摘要失败降级纯截断 | Gemini | context/chatCompressionService.ts findCompressSplitPoint | 低 | 高 |
 | 3 | 预算多阈值软提醒注入（去重防重发） | Codex | core/src/context/rollout_budget.rs | 低 | 中高 |
 | 4 | 轻量 repo map（grep 符号+引用计数排序，top-N 注入；不强引 networkx） | Aider | aider/repomap.py:525 | 中 | 中高 |
-| 5 | 补丁三级降级匹配（精确→rstrip→trim）作为 hca patch 兜底层 | Codex | apply-patch/src/seek_sequence.rs | 中 | 中 |
+| 5 | 补丁三级降级匹配（精确→rstrip→trim）作为 hca apply 的匹配层 | Codex | apply-patch/src/seek_sequence.rs | 中 | 中 |
 | 6 | auto-commit 每轮落盘（弱模型生成 message，失败不阻塞） | Aider | coders/base_coder.py auto_commit | 低 | 中 |
 | 7 | overflow 强制确定性压缩路径（估算失误时不依赖 LLM 自救） | Cline | extensions/context/compaction.ts | 低 | 中 |
 

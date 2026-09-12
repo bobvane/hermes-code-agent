@@ -1,6 +1,6 @@
-# PROJECT_CONTEXT — hermes-code-agent v2.3.0
+# PROJECT_CONTEXT — hermes-code-agent v2.4.0
 
-> 本文档固化 hermes-code-agent Skill 的完整上下文，供任何 Hermes session 在不了解聊天记录的情况下继续开发。版本：v2.3.0（截至 2026-09-07）。
+> 本文档固化 hermes-code-agent Skill 的完整上下文，供任何 Hermes session 在不了解聊天记录的情况下继续开发。版本：v2.4.0（截至 2026-09-12）。
 
 ---
 
@@ -57,6 +57,9 @@ hermes-code-agent  ── orchestrates ──► existing dev skills (stage work
 ├── templates/
 │   ├── CONVENTIONS.md                       # 全局编程约定骨架（六节）
 │   └── project-rules.md                     # 项目层规则骨架
+├── tests/
+│   └── test_apply.py                        # 回归检查 16 项（纯 stdlib，v2.4.0 新增）
+├── pyproject.toml                           # 项目标记 + testpaths（v2.4.0 新增，让 detect 能找到测试）
 ├── references/                              # 源码研究 + 设计决策记录
 │   ├── inspiration.md / opencode-deep-research.md / codex-deep-research.md
 │   ├── six-agent-feature-matrix.md
@@ -101,7 +104,7 @@ hermes-code-agent  ── orchestrates ──► existing dev skills (stage work
 | `quickcheck f.py` | 每次编辑后 | 秒级语法门（py_compile / tsc --noEmit / go build 等） |
 | `doomcheck "tag"` | 每轮循环 | 同 tag 连续 3 次 → exit 2 熔断 |
 | `locate f.py <<< snippet` | apply 失败时 | Aider 式模糊定位：最佳候选区+相似度分数（无硬阈值，判断权给模型） |
-| `apply <patch.diff>` | BUILD 编辑 | Codex seek_sequence 四级匹配（exact→rstrip→trim→Unicode-norm）+ 两阶段原子写入（v2.2.0+）+ `safe_repo_path()` 路径校验 |
+| `apply <patch.diff>` | BUILD 编辑 | Codex seek_sequence 四级匹配 + 事务提交（失败全量回滚，v2.4.0）+ 同文件多 block 链式叠加 + `safe_repo_path()`（锚定 git 根） |
 | ~~`patch <diff>`~~ | ~~fallback~~ | **v2.3.0 已砍除** —— 单一改码入口，用 `apply` |
 | `verify` | GATE | 跑全套测试/lint，exit 0/1/2 |
 | `state show/reset/bump` | 调试 | 看循环计数器（steps/redfix/doom/snapshots，存在 `.hca_state.json`） |
@@ -177,6 +180,20 @@ EXEMPT_FILES = {"skill_state.json"}  # 升级时豁免覆盖
 ---
 
 ## 6. 已完成功能（按版本）
+
+### v2.4.0（2026-09-12，当前版本）— 可靠性版本
+- [x] `autocommit` 密钥保护（`SECRET_PATH_RE`：`.env*`/密钥扩展名/凭据配置文件不再被 `git add -A` 扫入）
+- [x] 同文件多 block 链式叠加（第一次改动静默丢失的 P0 修复）
+- [x] `apply` 多文件事务提交 + 失败全量回滚（此前半应用 + 裸 traceback）
+- [x] `run()` 真杀进程组（`Popen` + `killpg`；此前 `TimeoutExpired.pid` 恒为 None 的死代码）
+- [x] 二进制文件结构化拒绝（此前裸 `UnicodeDecodeError`）
+- [x] `mkstemp` 替代可预测 tmp 名
+- [x] 删除/重命名补丁显式拒绝（错误信息不再误导）
+- [x] `safe_repo_path` 锚定 git 根（`git rev-parse --show-toplevel`）
+- [x] `runner_fix_hint()`：无 runner 时给出具体安装命令
+- [x] `tests/test_apply.py` 16 项回归检查 + `pyproject.toml`（本项目首次可自校验）
+- [x] 文档漂移整肃（9 个 goal-*.md 状态行、死引用、README 畸形表格、SKILL 死引用）
+- [x] 删除 `benchmarks/run_v180.py`（调用已删的 `guard record`，死代码）
 
 ### v2.3.0（2026-09-07，当前版本）— 单一改码入口
 - [x] 砍掉 `patch` 子命令（`cmd_patch` + `_unified_diff_blocks` + `_wsfree_*`，共 130 行）
@@ -380,15 +397,18 @@ python scripts/hca_gate.py update-apply     # 需先有 pending
 
 **自测状态**：
 - `tests/test_hca_gate.py` 已删除（v2.1.0 清理）
-- 按 Bob 指令"不要重建测试套件了，回头有人提出问题我们再解决"
-- 每次功能开发手工 smoke test 验证子命令行为
-- Benchmark 协议保留（`benchmarks/run_v180.py`），可在需要时重跑
+- **`tests/test_apply.py`（v2.4.0 起）**：16 项回归检查，纯 stdlib
+  - 运行：`python tests/test_apply.py`（或 `python -m pytest tests/`）
+  - 覆盖：多 hunk / 同文件多 block / 新建文件 / 多文件回滚 / 二进制拒绝 /
+    删除+重命名拒绝 / 路径安全 4 项 / 子目录锚定 git 根 / autocommit 密钥保护 / 超时杀进程组
+- **本项目现已可自校验**：`pyproject.toml` 提供项目标记，`detect` → `verify` → autocommit 全链路可用
+- Benchmark：`run_v180.py` 已删除（调用 v1.8.2 砍除的 `guard record`，死代码）；
+  保留 `protocol.md`（协议定义）+ `test_ttlcache.py`（可复用裁判）
 
-**最近一次验证**（v2.1.1，2026-09-07）：
-- `update-check --force`：节流跳过 ✓
-- `update-check --force`（new version simulated）：pending 写入 ✓
-- `update-apply`：tarball 下载 + 版本校验 ✓
-- 节流机制：72h / 3d 双指针正确 ✓
+**最近一次验证**（v2.4.0，2026-09-12）：
+- `python tests/test_apply.py`：16/16 通过 ✓
+- `hca_gate.py detect`：识别 `.venv/bin/python -m pytest -q` ✓
+- `hca_gate.py verify`：全绿 + autocommit 落盘 ✓
 
 ---
 
@@ -398,18 +418,19 @@ python scripts/hca_gate.py update-apply     # 需先有 pending
 - 无
 
 ### P1（功能完善）
-1. **项目规则文件缺失**：首次进入新项目时自动检测 `<项目名>.md` 并生成（templates/project-rules.md 有骨架）
-2. **verify 命令自动探测增强**：支持更多框架（Django/Next.js/Vite 等）
-3. **多模型轮换基准测试**：按 ROADMAP v1.6 候选②，中档模型轨常态化
+1. **verify 命令自动探测增强**：置信度排序 + 候选 fallback（ChatGPT 建议，当前探测失败即放弃）
+2. **`\ No newline at end of file` 语义**：apply 当前忽略该标记，无末尾换行的文件会被打上换行
+3. **非 pytest 测试框架的 failure fingerprint**：当前只认 pytest 的 `FAILED` 行，go/cargo/npm 不触发语义 doom
+4. **多模型轮换基准测试**：中档模型轨常态化（需可用模型额度）
 
 ### P2（体验优化）
-4. SKILL.md 中 locate 段落的中文翻译对齐（当前混合中英）
-5. benchmarks/README.md 加入 v2.1.x 数据
+5. SKILL.md 中 locate 段落的中文翻译对齐（当前混合中英）
 6. 升级后自动写 changelog 到 `backups/`
+7. `run(cmd.split())` 对带引号参数会切错（低危，可换 shlex）
 
 ### P3（长期）
-7. Hermes plugin / ACP-server 程序级硬门禁（roadmap 远期目标）
-8. 更细粒度的 token 消耗追踪（per-step 维度）
+8. Hermes plugin / ACP-server 程序级硬门禁（roadmap 远期目标，"apply 是唯一入口"目前仍是提示词纪律）
+9. 更细粒度的 token 消耗追踪（per-step 维度）
 
 ---
 
@@ -425,7 +446,7 @@ python scripts/hca_gate.py update-apply     # 需先有 pending
 | 4 | **hca_gate.py 是 stdlib-only** | 无 pip install 依赖，任何环境可跑 |
 | 5 | **exit-code 语义固定**（0/1/2/3） | 模型靠 exit code 判断状态，不能随意改 |
 | 6 | **apply 四级匹配不跳级** | exact→rstrip→trim→Unicode-norm，跳过级别会漏匹配 |
-| 7 | **atomic per-file writes** | 任一 hunk 失败 → 整补丁不落盘 |
+| 7 | **事务性提交**（v2.4.0 起） | 任一 hunk 失败 → 整补丁不落盘；任一文件提交失败 → 全量回滚 |
 | 8 | **doomcheck 同 tag 3 次熔断** | 盲修循环检测，不能改阈值 |
 | 9 | **failure fingerprint 集合语义** | 序无关、计数无关，有修复立即重置 |
 | 10 | **skill_state.json 不在项目目录** | 升级豁免；放在 `/opt/data/skills/hermes-code-agent/` |

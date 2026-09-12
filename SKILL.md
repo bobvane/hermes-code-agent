@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 2.3.0
+version: 2.4.0
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -81,7 +81,7 @@ after an edit, do NOT run tests blindly. Triage by failure type into three indep
 | ② STATIC channel | patch landed but syntax/lint errors | fix directly from the quickcheck/lint output (seconds-level fail-fast) | 3 tries |
 | ③ TEST channel | static clean, tests run and red | feed the exact verify digest back, fix, re-run | 5 red→fix cycles |
 
-**Preferred edit path (Codex parity):** emit unified-diff patches and land them with `python scripts/hca_gate.py apply <patch-or-stdin>`. The engine is the Codex apply-patch port: seek_sequence four-level matching (exact → rstrip → trim → Unicode-normalized, never skipping levels), atomic per-file writes (all files validated in memory, then committed via `os.replace()` so a partial apply never leaves the tree half-modified — v2.2.0), and structured errors ([PARSE]/[MATCH]/[IO]/[PATH] + hunk index + expected/actual context) designed to be fed back for model self-healing. `apply` is the ONLY patch entry point as of v2.3.0; plain `write_file` only for new files or full rewrites.
+**Preferred edit path (Codex parity):** emit unified-diff patches and land them with `python scripts/hca_gate.py apply <patch-or-stdin>`. The engine is the Codex apply-patch port: seek_sequence four-level matching (exact → rstrip → trim → Unicode-normalized, never skipping levels), transactional commit (every file validated in memory, then committed; any write failure rolls the whole set back — v2.4.0), and structured errors ([PARSE]/[MATCH]/[IO]/[PATH] + hunk index + expected/actual context) designed to be fed back for model self-healing. `apply` is the preferred and audited edit path (v2.3.0+). Enforcement reality (honest label): nothing physically stops the model from using `write_file` / shell redirection instead — the discipline is prompt-level, and post-hoc `quickcheck`/`verify` is the backstop. `apply` supports MODIFY and ADD only; DELETE, RENAME and binary patches are rejected with an explicit `[PARSE]` error.
 
 Rules: never jump to the test suite while ① or ② is failing; never re-patch while a test digest is the actual signal. Global ceiling still applies (see budget). Run the project's tests via `python scripts/hca_gate.py verify` — if red, feed the exact error back, fix, re-run. If the script is unavailable in this environment, run the project's tests manually and say so explicitly.
 
@@ -89,7 +89,7 @@ Forced-loop discipline (OpenCode): the error output IS your next input — proce
 
 ## Deterministic gate: scripts/hca_gate.py / 确定性门禁脚本（v1.2.1 核心）
 
-The punch-clock of the hard loop. Rules a model might forget become commands that always run. Stdlib-only Python; self-tested in `tests/test_hca_gate.py`. Call it at each stage instead of remembering prose rules:
+The punch-clock of the hard loop. Rules a model might forget become commands that always run. Stdlib-only Python; regression checks live in `tests/test_apply.py` (run: `python tests/test_apply.py`, no pytest required). Call it at each stage instead of remembering prose rules:
 
 ```bash
 python scripts/hca_gate.py detect          # CLARIFY: print detected test/lint/format commands
@@ -286,8 +286,6 @@ The engine is deterministic Python — same verdict as the upstream engines for 
 If the conversation already contains a structured plan (from omh, a written AGENTS.md, or any planner), **consume it as step 2's input** — do not re-plan. If none exists, the mini-plan above suffices. The skill never requires a planner to function.
 
 ## Context management (keeps weak models on track)
-## Benchmark results
-Full A/B benchmark data and the 5-role design review are in `benchmarks/v180-benchmark-report.md` + raw results in `benchmarks/v180_raw_results.json`. Quick takeaway: every green delivered is verified (`exit 0`); weak models still hit a hard ceiling.
 
 - Prefer `search_files` / `read_file` (paged) over dumping whole trees.
 - Before editing, read only the files the change touches + their direct callers.
