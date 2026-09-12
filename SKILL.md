@@ -1,7 +1,7 @@
 ---
 name: hermes-code-agent
 description: "Use when the user wants to build, fix, refactor, or verify software in a repo. Wraps Hermes's coding tools in a verify-loop (implement → test/lint → fix → only green is done) and orchestrates the existing general dev skills as stage workers. Distilled from 6 open coding agents (OpenCode primary, Codex + Aider + Cline + Gemini CLI + Pi), model-agnostic, plan-source-agnostic."
-version: 2.4.0
+version: 2.4.1
 author: bobvane
 license: MIT
 platforms: [linux, macos, windows]
@@ -46,7 +46,7 @@ Every implementation task goes through this. The agent must NOT report "done" un
 6. GATE            — only when ALL checks green AND scope met → mark step done.
                       Run `python scripts/hca_gate.py update-pending`. If non-empty, clarify:
                       `"检测到新版本 vX.Y.Z（本地 vA.B.C），A. 升级 Skill  B. 不升级（3 天后再提示）"`
-                      选 A → 自动执行 `python scripts/hca_gate.py update-apply`，完成后提示「已升级到 vX.Y.Z，重启 Hermes 网关后生效。」；选 B → 写 next_prompt_ts=now+3d，本轮静默。
+                      选 A → 自动执行 `python scripts/hca_gate.py update-apply`，完成后提示「已升级到 vX.Y.Z，重启 Hermes 网关后生效。」；选 B → 执行 `python scripts/hca_gate.py update-pending --snooze`（写入 3 天冷却，本轮静默）。
 7. REPEAT for next step. Then report: what changed, what's green, what's untested.
 ```
 
@@ -163,7 +163,7 @@ Flow the model MUST follow:
    - Empty output (`"update: none pending"`) → do nothing, continue as usual.
    - Non-empty output (`"PENDING local=X remote=Y"`) → `clarify("检测到新版本 vY（本地 vX），A. 升级 Skill  B. 不升级（3 天后再提示）", choices=["A. 升级 Skill", "B. 不升级"])`.
      - User picks A → `python scripts/hca_gate.py update-apply` (downloads tarball, backs up old SKILL.md, overwrites skill directory; `skill_state.json` is exempt and survives). Then tell the user: "已升级到 vY，重启 Hermes 网关后生效。"
-     - User picks B → the gate subcommand `update-pending` returns empty on the next call (cooldown active); no action needed, the script manages `next_prompt_ts` automatically. **Do NOT call `update-apply` without `--version` after B** — the cooldown pointer prevents accidental re-prompting for 3 days.
+     - User picks B → run `python scripts/hca_gate.py update-pending --snooze` (this is the ONLY writer of `next_prompt_ts`; without it the prompt would re-appear on the very next task). No other action needed. **Do NOT call `update-apply` after B.**
 3. The gate subcommands are **L1** (per the approval tiers table): execute them without asking, but log their output honestly.
 
 Throttle defaults: `UPDATE_CHECK_HOURS=72` (3 days), `UPGRADE_PROMPT_DAYS=3` (same value keeps them in sync), `UPDATE_HTTP_TIMEOUT=5` (short, never stall the task).
@@ -180,7 +180,16 @@ When working on this project itself (not projects the skill operates on), the de
 2. Bump version: SKILL.md frontmatter + ROADMAP.md "當前版本" + PROJECT_CONTEXT.md header must agree. Bob's rule: last digit 0-9 increment, 9 → carry (v2.11.9 → v2.12.0). Three-place sync is mandatory (CI reads from package.json-equivalent field; missing one = silent skip on next release).
 3. Update CURRENT_TASK.md with the milestone, then commit. Tag: `git tag vX.Y.Z && git push origin main vX.Y.Z`.
 4. Create GitHub Release: `gh_token` lives in `/opt/data/.env` as `GITHUB_TOKEN=...` (also used by `github-sync-forks.py` and `hermes-backup.py`). `curl -X POST .../releases` with the release notes body. The release tarball is what `update-apply` downloads.
-5. **Do NOT touch `/opt/data/skills/hermes-code-agent/`.** The next task's CLARIFY-stage `update-check` (or the user's manual `update-apply`) will pick it up. Manually `cp` here is the wrong move (Bob 拍板 2026-09-07: self-upgrade is the deliverable, not manual sync).
+5. **Upload the checksum asset** — `update-apply` verifies the tarball against a release asset (`hca-v<ver>.tar.gz.sha256`); without it the upgrade falls back to a TLS-only warning:
+   ```bash
+   curl -sL -o /tmp/hca-v<ver>.tar.gz "https://github.com/<repo>/archive/refs/tags/v<ver>.tar.gz"
+   sha256sum /tmp/hca-v<ver>.tar.gz > /tmp/hca-v<ver>.tar.gz.sha256
+   REL=$(curl -s -H "Authorization: token $gh_token" .../releases/tags/v<ver> | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
+   curl -s -X POST -H "Authorization: token $gh_token" -H "Content-Type: text/plain" \
+     --data-binary @/tmp/hca-v<ver>.tar.gz.sha256 \
+     "https://uploads.github.com/<repo>/releases/$REL/assets?name=hca-v<ver>.tar.gz.sha256"
+   ```
+6. **Do NOT touch `/opt/data/skills/hermes-code-agent/`.** The next task's CLARIFY-stage `update-check` (or the user's manual `update-apply`) will pick it up. Manually `cp` here is the wrong move (Bob 拍板 2026-09-07: self-upgrade is the deliverable, not manual sync).
 
 **Only break the default when** GitHub is unreachable, fresh-installing, or hotfixing before the 72h throttle window expires. See `references/install-copy-sync.md` for the manual fallback (now framed as the exception, not the rule).
 

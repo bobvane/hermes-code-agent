@@ -1,6 +1,6 @@
-# PROJECT_CONTEXT — hermes-code-agent v2.4.0
+# PROJECT_CONTEXT — hermes-code-agent v2.4.1
 
-> 本文档固化 hermes-code-agent Skill 的完整上下文，供任何 Hermes session 在不了解聊天记录的情况下继续开发。版本：v2.4.0（截至 2026-09-12）。
+> 本文档固化 hermes-code-agent Skill 的完整上下文，供任何 Hermes session 在不了解聊天记录的情况下继续开发。版本：v2.4.1（截至 2026-09-12）。
 
 ---
 
@@ -274,10 +274,11 @@ EXEMPT_FILES = {"skill_state.json"}  # 升级时豁免覆盖
 
 **暂无活跃开发任务。**
 
-v2.1.1 已于 2026-09-07 完整交付，包括：
-- GitHub Release v2.1.1（https://github.com/bobvane/hermes-code-agent/releases/tag/v2.1.1）
-- 安装副本同步（/opt/data/skills/hermes-code-agent/）
-- skill_state.json 已生成（up-to-date，节流正常）
+v2.4.0（可靠性版本）已于 2026-09-12 交付：
+- GitHub Release v2.4.0（https://github.com/bobvane/hermes-code-agent/releases/tag/v2.4.0）
+- 回归检查 `tests/test_apply.py` 16 项全绿；本仓库 `detect → verify → autocommit` 全链路可用
+- **安装副本不再手动同步**（Bob 2026-09-07 拍板）：开发完成 = push + Release，等 Skill 自检升级
+- 安装副本当前仍为 v2.3.0，待下一次任务触发 `update-check` 自动升级
 
 ---
 
@@ -485,7 +486,7 @@ python scripts/hca_gate.py update-apply     # 需先有 pending
 | 项目状态 | `<项目目录>/.hca_state.json` | 循环计数器 |
 | 危险命令策略 | `/opt/data/workspace/hermes-code-agent/scripts/cmd_policy.yaml` | 策略表 |
 | 全局约定模板 | `/opt/data/workspace/hermes-code-agent/templates/CONVENTIONS.md` | 随 Skill 分发 |
-| GitHub Release | https://github.com/bobvane/hermes-code-agent/releases/tag/v2.1.1 | 升级源 |
+| GitHub Release | https://github.com/bobvane/hermes-code-agent/releases/latest | 升级源（`update-check` 走 API 取最新） |
 
 ---
 
@@ -502,8 +503,12 @@ python scripts/hca_gate.py update-apply     # 需先有 pending
 | v2.0.0 | 2026-08-26 | 两层规则 + repo map + patch 容错 |
 | v2.0.1 | 2026-08-26 | locate 重写 |
 | v2.1.0 | 2026-08-27 | feature-complete 里程碑 |
-| **v2.1.1** | **2026-09-07** | **自检升级（72h 节流 + 3d 冷却）** |
+| v2.1.1 | 2026-09-07 | 自检升级（72h 节流 + 3d 冷却） |
+| v2.2.0 | 2026-09-07 | 安全硬化（路径校验 / SHA-256 / 解释器逃逸拦截） |
+| v2.3.0 | 2026-09-07 | 单一改码入口（砍 patch，apply 唯一） |
+| **v2.4.0** | **2026-09-12** | **可靠性版本（P0 数据丢失/密钥泄露修复 + 回归测试）** |
+| v2.4.1 | 2026-09-12 | 复审修复（find -delete / .GIT 大小写 / tar 过滤 / snooze 冷却 / SHA-256 资产） |
 
 ---
 
-*本文档由 hermes-code-agent Skill 自身生成，version: 2.1.1。任何修改请同步更新本文档顶部的版本声明。*
+*本文档由 hermes-code-agent Skill 自身生成，version: 2.4.1。任何修改请同步更新本文档顶部的版本声明。*

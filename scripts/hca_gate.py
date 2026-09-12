@@ -116,7 +116,8 @@ def safe_repo_path(raw_path: str) -> Path:
             "path", f"path escapes repository: {raw_path}")
     if candidate == root:
         raise ApplyPatchError("path", "cannot modify repository root")
-    if ".git" in candidate.parts:
+    # casefold: .GIT/.Git are the same dir as .git on macOS/Windows FS
+    if any(p.casefold() == ".git" for p in candidate.parts):
         raise ApplyPatchError("path", f"cannot modify .git internals: {raw_path}")
     if candidate.name in {STATE_FILE, "skill_state.json"}:
         raise ApplyPatchError("path", f"protected state file: {raw_path}")
@@ -1289,6 +1290,12 @@ def _load_policy():
             body = ln[ln.index("{") + 1:ln.rindex("}")]
             m_pat = re.search(r"pattern:\s*\[(.*?)\]", body)
             if not m_pat:
+                # A rule line that does not yield a pattern would be dropped
+                # silently and the command would fall back to `confirm`. Say so
+                # instead of failing quiet — a malformed file must not look
+                # like a tightened policy.
+                print(f"[HCA-GATE] WARNING: unparseable policy rule "
+                      f"(ignored): {ln[:70]}", file=sys.stderr)
                 continue
             toks = [t.strip().strip("\"'") for t in m_pat.group(1).split(",")
                     if t.strip()]
@@ -1341,6 +1348,8 @@ def _check_interpreter_escape(toks):
         for t in toks[1:]:
             if t == "-exec" or t.startswith("-exec"):
                 return "find -exec"
+            if t in {"-delete", "-execdir", "-ok", "-okdir", "-fprint0"}:
+                return f"find {t}"
     elif interp in {"xargs", "parallel"}:
         # xargs takes a command after --
         return f"{interp} command chain"
@@ -1518,9 +1527,17 @@ def cmd_update_check(args):
     sys.exit(0)
 
 
-def cmd_update_pending(_args):
-    """Called after GATE: non-empty output means 'offer the upgrade now'."""
+def cmd_update_pending(args):
+    """Called after GATE: non-empty output means 'offer the upgrade now'.
+    `--snooze` is what the model runs after the user picks B — it is the ONLY
+    writer of next_prompt_ts (without it the cooldown never armed and the
+    prompt came back on the very next task)."""
     st = read_skill_state()
+    if getattr(args, "snooze", False):
+        st["next_prompt_ts"] = time.time() + UPGRADE_PROMPT_DAYS * 86400
+        write_skill_state(st)
+        print(f"[HCA-GATE] upgrade prompt snoozed for {UPGRADE_PROMPT_DAYS}d")
+        sys.exit(0)
     pending = st.get("pending")
     if pending:
         now = time.time()
@@ -1572,17 +1589,19 @@ def cmd_update_apply(args):
     if not data:
         fail("update: download returned no bytes")
 
-    # SHA-256 verification: fetch the .sha256 sidecar and compare.
-    # Format: "<hex>  <filename>" or just "<hex>". Mismatch => abort.
-    sha256_url = f"https://github.com/{GITHUB_REPO}/archive/refs/tags/v{remote}.sha256"
+    # SHA-256 verification. GitHub does NOT serve a .sha256 sidecar for tag
+    # archives (that URL 404s), so read the hash from a release ASSET named
+    # hca-v<ver>.tar.gz.sha256, uploaded by the release procedure. Releases
+    # predating that step simply fall through to the warning below.
+    sha256_url = (f"https://github.com/{GITHUB_REPO}/releases/download/"
+                  f"v{remote}/hca-v{remote}.tar.gz.sha256")
     expected_sha256 = ""
     try:
         with urllib.request.urlopen(sha256_url, timeout=UPDATE_HTTP_TIMEOUT) as r:
             sha_text = r.read().decode("utf-8", errors="replace").strip()
-        # Parse "hex  filename" or "hex" format
         expected_sha256 = sha_text.split()[0].lower() if sha_text else ""
     except Exception:
-        pass  # No sidecar or network issue; warn but allow (--skip-verify override)
+        pass  # no asset for this release — warn below, never block
     if args.skip_verify:
         print("[HCA-GATE] update: SHA-256 verification SKIPPED (--skip-verify)")
     elif expected_sha256:
@@ -1592,8 +1611,8 @@ def cmd_update_apply(args):
                  f"got={actual_sha256} — aborting for safety")
         print(f"[HCA-GATE] update: SHA-256 verified ({actual_sha256[:16]}...)")
     else:
-        print(f"[HCA-GATE] update: WARNING no .sha256 sidecar found, "
-              f"proceeding without integrity check")
+        print("[HCA-GATE] update: WARNING no .sha256 release asset for this "
+              "version — integrity relies on TLS + the embedded version check")
 
     with tempfile.TemporaryDirectory() as tmp:
         tarball = Path(tmp) / "release.tar.gz"
@@ -1602,7 +1621,10 @@ def cmd_update_apply(args):
         extract_dir.mkdir()
         import tarfile
         with tarfile.open(tarball, "r:gz") as tf:
-            tf.extractall(extract_dir)
+            try:
+                tf.extractall(extract_dir, filter="data")  # 3.12+: blocks
+            except TypeError:                              # path traversal
+                tf.extractall(extract_dir)                 # Python < 3.12
         # archive contains a single top dir: hermes-code-agent-<version>/
         src_root = next(extract_dir.iterdir())
 
@@ -1696,8 +1718,11 @@ def main():
     u.add_argument("--force", action="store_true",
                    help="bypass 72h throttle and force a network check")
 
-    sub.add_parser("update-pending",
-                   help="non-empty output = there is a pending upgrade to offer")
+    up = sub.add_parser("update-pending",
+                        help="non-empty output = there is a pending upgrade to offer")
+    up.add_argument("--snooze", action="store_true",
+                    help="user chose B: suppress the prompt for "
+                         "UPGRADE_PROMPT_DAYS")
 
     sub.add_parser("update-status",
                    help="show version, throttle pointers, pending info")

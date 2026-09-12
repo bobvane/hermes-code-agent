@@ -58,11 +58,16 @@ python tests/test_apply.py     # 回归检查，纯 stdlib，不需要装 pytest
 
 ## 系统支持
 
-- **平台**：Linux / macOS 完整支持；Windows 为 best-effort（`start_new_session` + `os.killpg` 在 Windows 上行为不同）。
+- **平台**：Linux / macOS 完整支持；**Windows 仅部分支持**，以下能力降级：
+  - 超时杀进程组：`os.killpg` / `os.getpgid` 不存在 → 回退为只杀直接子进程（其 fork 出的孙进程可能残留）
+  - 依赖 `git` 的命令（snapshot / restore / autocommit）行为一致，但路径大小写不敏感需注意
+  - `chmod` 类权限语义不同
+  - 其余子命令（`apply` / `check_cmd` / `verify` / `quickcheck` / `repomap` / 更新检查）跨平台可用
 - **依赖**：Python 3.8+（stdlib only，无第三方依赖），Git 必须（snapshot/restore/auto-commit 用到）。
-- **网络**：仅 `update-check` 子命令需要（5s 超时，失败静默降级，不阻塞主流程）。
+  - `tarfile` 的 `filter="data"` 需 3.12+，旧版本自动回退为无过滤解压。
+- **网络**：仅 `update-check` / `update-apply` 需要（5s 超时，失败静默降级，不阻塞主流程）。
 - **外部工具**：`pytest` / `npm` / `cargo` / `go` 等只是被探测和调用，不强制安装。
-- **无网络环境**：除 `update-check` / `update-apply` 外的所有子命令均可离线运行。
+- **无网络环境**：除更新相关的子命令外全部可离线运行。
 
 ## 许可
 

@@ -8,6 +8,7 @@ One file, no fixtures, no framework: each check builds its own throwaway git
 repo under /tmp. These pin the v2.4.0 fixes specifically — delete a
 regression test only when the behaviour it pins is deliberately dropped.
 """
+import json
 import subprocess
 import sys
 import tempfile
@@ -241,11 +242,67 @@ def test_run_timeout_kills_group():
           rc == 124 and dt < 10, f"rc={rc} dt={dt:.1f}s out={out[:80]!r}")
 
 
+def test_dangerous_command_verdicts():
+    """cmd_policy + interpreter-escape backstops."""
+    d = new_repo()
+    def verdict(cmd):
+        r = gate(d, "check_cmd", cmd)
+        return r.returncode
+    cases = [
+        ("rm -rf /", 1),                     # deny
+        ("find . -name '*.py' -delete", 3),  # allowlisted verb + destructive flag
+        ("find . -name '*.py' -exec rm {} ;", 3),
+        ("python -c 'print(1)'", 3),
+        ("bash -c 'ls'", 3),
+        ("ls -la", 0),                       # clean allow
+    ]
+    for cmd, want in cases:
+        got = verdict(cmd)
+        check(f"check_cmd: {cmd[:34]!r} -> exit {want}", got == want,
+              f"got exit {got}")
+
+
+def test_git_dir_case_insensitive():
+    """.GIT/.Git are the same directory as .git on macOS/Windows."""
+    d = new_repo()
+    for name in (".GIT/config", ".Git/config"):
+        r = apply(d, f"--- a/{name}\n+++ b/{name}\n@@ -1 +1 @@\n-a\n+b\n")
+        check(f"path: {name} rejected",
+              r.returncode == 1 and "Traceback" not in r.stdout + r.stderr,
+              f"rc={r.returncode} out={(r.stdout + r.stderr)[-160:]!r}")
+
+
+def test_update_pending_snooze():
+    """--snooze is the only writer of next_prompt_ts; without it the upgrade
+    prompt comes back on the very next task."""
+    d = Path(tempfile.mkdtemp(prefix="hca-skill-"))
+    (d / "scripts").mkdir()
+    for f in ("hca_gate.py", "cmd_policy.yaml"):
+        (d / "scripts" / f).write_bytes((SCRIPTS / f).read_bytes())
+    (d / "SKILL.md").write_text("---\nversion: 9.9.9\n---\n")
+    (d / "skill_state.json").write_text(
+        '{"last_check_ts": 0, "next_prompt_ts": 0, '
+        '"pending": {"remote": "9.9.9", "local": "1.0.0"}}')
+    r = subprocess.run([sys.executable, str(d / "scripts" / "hca_gate.py"),
+                        "update-pending", "--snooze"],
+                       cwd=d, capture_output=True, text=True)
+    npt = json.loads((d / "skill_state.json").read_text())["next_prompt_ts"]
+    check("update-pending --snooze arms the cooldown",
+          r.returncode == 0 and npt > time.time() + 2 * 86400,
+          f"rc={r.returncode} next_prompt_ts={npt} out={r.stdout[-120:]!r}")
+    r2 = subprocess.run([sys.executable, str(d / "scripts" / "hca_gate.py"),
+                         "update-pending"],
+                        cwd=d, capture_output=True, text=True)
+    check("update-pending after snooze stays quiet",
+          "none pending" in r2.stdout, f"out={r2.stdout[-120:]!r}")
+
+
 ALL = [test_modify_and_multihunk, test_same_file_two_blocks_chain,
        test_new_file, test_multifile_rollback, test_binary_file_rejected,
        test_delete_and_rename_rejected, test_path_safety,
        test_repo_root_anchoring, test_autocommit_refuses_secrets,
-       test_run_timeout_kills_group]
+       test_run_timeout_kills_group, test_dangerous_command_verdicts,
+       test_git_dir_case_insensitive, test_update_pending_snooze]
 
 if __name__ == "__main__":
     for t in ALL:

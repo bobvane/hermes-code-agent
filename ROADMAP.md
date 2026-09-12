@@ -110,6 +110,20 @@ The skill **never rewrites** what the stage-worker skills already define. It cal
 
 ## 當前版本 / Current version
 
+**v2.4.1** (2026-09-12): **复审修复 + 自更新完整性落地** — 第二轮外部复审（Perplexity，针对 v2.3.0）发现 5 个 v2.4.0 未覆盖的真实问题，全部修复：
+
+- **`find ... -delete` 被放行**（安全）—— `find` 在 allowlist 里，而逃逸检测只看 `-exec`。实测 `find . -name "*.py" -delete` → exit 0 ALLOW。现已把 `-delete` / `-execdir` / `-ok` / `-okdir` / `-fprint0` 一并纳入强制 confirm。
+- **`.git` 大小写绕过**（安全）—— `.GIT/config`、`.Git/config` 在 macOS/Windows 不区分大小写的文件系统上就是 `.git` 内部，此前检查用精确字符串比对直接放行。改为 `casefold()` 比对。
+- **`tarfile.extractall` 无过滤**（安全）—— 解压下载的 tarball 时存在路径穿越风险。改为 `filter="data"`（3.12+），旧版本捕获 `TypeError` 回退。
+- **`next_prompt_ts` 从来没人写**（功能失效）—— 文档称"选 B 后脚本自动管理冷却指针"，但全代码只有读取、没有写入 → 选 B 从未生效，下次任务立刻再弹。新增 `update-pending --snooze` 作为唯一写入点，SKILL.md 同步改为显式调用。
+- **`update-apply` 的 SHA-256 校验从来没生效**（v2.2.0 遗留）—— GitHub 不为 tag archive 提供 `.sha256` sidecar（实测 404），每次都走 `except: pass` 打印警告继续。改为从 **release asset** `hca-v<ver>.tar.gz.sha256` 读取，发布流程增加上传该资产的步骤；无资产的旧版本仍降级为警告（不阻塞）。
+- 策略 mini-parser 遇到无法解析的规则行时输出 WARNING（此前静默丢规则，看起来像"策略更严了"）
+- PROJECT_CONTEXT §7/§16/§17 版本残留清理（此前仍停在 v2.1.1）
+
+**测试**：`tests/test_apply.py` 从 16 项扩到 26 项（新增 check_cmd 判定矩阵 6 项、`.GIT` 大小写 2 项、snooze 冷却 2 项）。
+
+**明确不采纳**：拆分 `hca_gate.py`（单文件 stdlib-only 是有意设计）、`git clean -fdx` 改 deny（confirm 已要求用户逐条批准，符合"破坏性操作必须确认"的设计）、状态文件并发锁（单 agent 设计）、`skill_root()` symlink 担忧（`resolve()` 已跟随链接）。
+
 **v2.4.0** (2026-09-12): **可靠性版本 (reliability release)** — 不加任何新 Agent 功能，专修"文档宣称的确定性高于代码实际提供的确定性"。触发：Bob 让 ChatGPT 复审 GitHub main + 本地实测审计，两份清单合并后 14 条成立/部分成立、0 误报。
 
 **P0（会真正造成伤害）**
